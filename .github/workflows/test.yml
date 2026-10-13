@@ -1,4 +1,4 @@
-name: Tests
+name: Legacy OMP tests
 
 on:
   push:
@@ -22,3 +22,4 @@ jobs:
         with:
           node-version: '24'
       - run: npm test
+        working-directory: legacy
