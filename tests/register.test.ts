@@ -88,6 +88,10 @@ function world(on: On, opts: WorldOptions = {}): World {
   on('ui.render', { component: 'AbovePrompt' }, (): RenderElement => ({ type: 'Box', props: {}, children: [] }) as RenderElement)
   // 엔진의 진행 줄: 그 단어를 Text 하나로
   on('ui.render', { component: 'Spinner' }, ($, e): RenderElement => ({ type: 'Text', props: {}, children: [e.props.word] }) as RenderElement)
+  // 대화창의 내 질문 줄·도구 줄·도구 묶음 줄도 Text 하나로
+  on('ui.render', { component: 'UserMessage' }, ($, e): RenderElement => ({ type: 'Text', props: {}, children: [e.props.text] }) as RenderElement)
+  on('ui.render', { component: 'ToolUse' }, ($, e): RenderElement => ({ type: 'Text', props: {}, children: [`${e.props.tool}()`] }) as RenderElement)
+  on('ui.render', { component: 'ToolGroup' }, ($, e): RenderElement => ({ type: 'Text', props: {}, children: [`호출 ${e.props.calls.length}개`] }) as RenderElement)
   on('turn.complete', () => ({ text: '' }))
   return w
 }
@@ -794,4 +798,140 @@ test('자동 켜기 옵션을 끄면 아무것도 쓰지 않는다', NO_AUTO, as
   const w = world(on, { settings: {} })
   await start($)
   expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
+})
+
+// ---- 데스크톱: 진행 줄이 한 줄짜리라, 실시간 생각은 대화창의 줄 아래에 그린다 ----
+
+/** 데스크톱 대화창의 내 질문 줄 */
+const USER_ROW = (requestId: string, text = 'prompt') => ({
+  plugin: PLUGIN,
+  surface: 'desktop' as const,
+  component: 'UserMessage' as const,
+  requestId,
+  props: { text, origin: { kind: 'composer' as const }, isExpanded: true },
+})
+
+/** 데스크톱 대화창의 도구 호출 줄 */
+const TOOL_ROW = (id: string) => ({
+  plugin: PLUGIN,
+  surface: 'desktop' as const,
+  component: 'ToolUse' as const,
+  requestId: id,
+  props: { tool_use_id: id, tool: 'Read', input: {}, isRunning: true, isErrored: false, isInterrupted: false },
+})
+
+const translateAll: Reply = (p, system) => answered(isThinking(system) ? `생각 ${sourceOf(p)}` : `번역 ${sourceOf(p)}`)
+
+test('데스크톱: 진행 줄은 그대로 두고, 생각하는 동안 대화창의 내 질문 아래에 여러 줄로 쌓다가, 도구를 부르면 그 도구 줄 아래로, 답변 글이 나오면 답변 위로 옮긴다', async ($, on) => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let release2!: () => void
+  const gate2 = new Promise<void>(resolve => {
+    release2 = resolve
+  })
+  const w = world(on, { reply: translateAll })
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: 'First I will open the slides one by one.\n\nThen I check the citations' },
+    gate,
+    { kind: 'thinking', index: 0, text: ' carefully.' },
+    { kind: 'tool', index: 1, id: 'call-1', name: 'Read' },
+    { kind: 'thinking', index: 2, text: 'The second slide cites a retracted paper.\n\n' },
+    gate2,
+    { kind: 'text', index: 3, text: 'Done.' },
+  ])
+  await start($)
+  const older = await $.ui.mount(USER_ROW('u-0')) // 예전에 같은 글로 보낸 질문
+  await turn($)
+  const prompt = await $.ui.mount(USER_ROW('u-1'))
+  const deskBand = await $.ui.mount({ ...BAND, surface: 'desktop' as const })
+  const deskSpinner = await $.ui.mount({ ...SPINNER, surface: 'desktop' as const })
+  const termPrompt = await $.ui.mount({ ...USER_ROW('u-1'), surface: 'terminal' as const })
+  expect(await textOf(prompt)).toBe('prompt') // 생각이 없으면 엔진 그림 그대로
+  const reading = readAll($)
+  await w.clock.settle()
+
+  // 생각하는 도중: 이번 질문 줄 바로 아래에, 진행 줄이 아니라 대화창 안에 여러 줄로
+  const live = await textOf(prompt)
+  expect(live).toContain('prompt')
+  expect(live).toContain('생각 First I will open the slides one by one.')
+  expect(live).toContain(STREAMING_THINKING)
+  expect(live.indexOf('prompt')).toBeLessThan(live.indexOf('✻ 생각')) // 질문 줄이 위, 생각이 아래
+  expect(await textOf(older)).toBe('prompt') // 같은 글의 예전 질문 줄에는 안 붙는다
+  expect(await textOf(deskSpinner)).toBe('Working') // 한 줄짜리 진행 줄은 엔진 것 그대로
+  expect(await textOf(deskBand)).toBe('') // 입력창 위 자리도 비어 있다
+  expect(await textOf(termPrompt)).toBe('prompt') // 터미널은 진행 줄 위에 그리니 질문 줄은 그대로
+  await prompt.press({ key: 'fold' }) // 여기서도 접고 펼 수 있다
+  await w.clock.settle()
+  expect(w.store.get('band-collapsed')).toBe(true)
+  expect(await textOf(prompt)).toContain('생각 First I will open the slides one by one.') // 접혀도 마지막 세 줄
+  await prompt.press({ key: 'fold' })
+  await w.clock.settle()
+  expect(w.store.get('band-collapsed')).toBe(false)
+
+  // 생각이 끝나고 도구를 부른다: 그 도구 줄이 그려지면 생각은 그 아래로 옮겨 간다
+  release()
+  await w.clock.settle()
+  expect(await textOf(prompt)).toContain('생각 Then I check the citations carefully.') // 도구 줄이 아직 안 그려졌으면 질문 줄 아래 그대로
+  const tool = await $.ui.mount(TOOL_ROW('call-1'))
+  const underTool = await textOf(tool)
+  expect(underTool).toContain('Read()')
+  expect(underTool).toContain('생각 Then I check the citations carefully.')
+  expect(underTool).toContain('생각 The second slide cites a retracted paper.')
+  expect(await textOf(prompt)).toBe('prompt')
+  const termTool = await $.ui.mount({ ...TOOL_ROW('call-1'), surface: 'terminal' as const })
+  expect(await textOf(termTool)).toBe('Read()')
+
+  // 답변 글이 나오면 생각은 답변 위로 옮겨 가고 도구 줄은 원래대로
+  release2()
+  await reading
+  await w.clock.settle()
+  expect(await textOf(tool)).toBe('Read()')
+  expect(await textOf(deskBand)).toBe('')
+  const reply = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AssistantMessage', requestId: 'msg-1', props: { text: 'Done.', isFirstOfReply: true } })
+  const above = await textOf(reply)
+  expect(above).toContain('생각 Then I check the citations carefully.')
+  expect(above).toContain('생각 The second slide cites a retracted paper.')
+  expect(w.appended()).toEqual([]) // 표시만 바꾼다
+})
+
+test('데스크톱: 도구 호출이 묶음 한 줄(ToolGroup)로 접혀 있으면 그 줄 아래에 그린다', async ($, on) => {
+  const w = world(on, { reply: translateAll })
+  stepWith(on, [
+    { kind: 'tool', index: 0, id: 'call-1', name: 'Read' },
+    { kind: 'thinking', index: 1, text: 'Both files define the same helper.\n\n' },
+  ])
+  await start($)
+  await turn($)
+  const prompt = await $.ui.mount(USER_ROW('u-1'))
+  await readAll($)
+  await w.clock.settle()
+  expect(await textOf(prompt)).toContain('생각 Both files define the same helper.')
+  const call = (id: string) => ({ tool_use_id: id, tool: 'Read', input: {}, isRunning: false, isErrored: false, isInterrupted: false })
+  const group = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'desktop',
+    component: 'ToolGroup',
+    props: { calls: [call('call-0'), call('call-1')], isActive: true, isExpanded: false },
+  })
+  const shown = await textOf(group)
+  expect(shown).toContain('호출 2개')
+  expect(shown).toContain('생각 Both files define the same helper.')
+  expect(await textOf(prompt)).toBe('prompt')
+})
+
+test('데스크톱: 아래에 그릴 줄을 아직 모르면(입력 없이 이어진 턴 등) 입력창 위 자리에 대신 보여 준다', async ($, on) => {
+  const w = world(on, { reply: translateAll })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Picking up where I left off.\n\n' }])
+  await start($)
+  const prompt = await $.ui.mount(USER_ROW('u-0'))
+  await $.turn.start({ text: '', turnId: 't1' })
+  const deskBand = await $.ui.mount({ ...BAND, surface: 'desktop' as const })
+  await readAll($)
+  await w.clock.settle()
+  expect(await textOf(deskBand)).toContain('생각 Picking up where I left off.')
+  expect(await textOf(prompt)).toBe('prompt') // 지난 턴의 질문 줄에는 안 붙는다
+  const termBand = await $.ui.mount(BAND)
+  expect(await textOf(termBand)).toBe('') // 터미널은 진행 줄 위에 그린다
 })

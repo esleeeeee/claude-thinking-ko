@@ -11,9 +11,12 @@
 //
 // Thinking: there is no render site for thinking blocks, so the original thinking row stays as
 // it is. The thinking text is read from the response stream (`turn.step` thinking chunks) while
-// it streams; each finished sentence or paragraph is translated right away. In the transcript, the
-// turn's thoughts not yet followed by reply text are drawn above the engine's own progress row
-// (`Spinner`, wrapped, not replaced) as they come in; once reply text follows them, they are
+// it streams; each finished sentence or paragraph is translated right away. The turn's thoughts not
+// yet followed by reply text are drawn in the transcript as they come in: on the terminal above the
+// engine's own progress row (`Spinner`, wrapped, not replaced); elsewhere (the desktop draws its
+// progress row on one line) under the latest row before them, the turn's prompt (`UserMessage`) or
+// its latest tool call (`ToolUse`, or the folded `ToolGroup` holding it), wrapped the same way; while
+// no such row is known, in the band above the prompt. Once reply text follows them, they are
 // drawn at the top of that reply block instead (`thinking_in_reply`, on by default). When a
 // thinking block ends, what follows it in the stream waits a moment (at most HOLD_MS, inside the
 // hook's budget) for that thought's last part to be translated, so the Korean thought shows before
@@ -23,7 +26,7 @@
 // the terminal does not have by default): where no settings file says anything about them, the
 // module turns them on at start (`auto_thinking_summaries`, with a backup); when a thinking block
 // arrives empty anyway, the band above the prompt says so (with a button while the setting is off).
-import type { HttpInit, HttpResponse, Register } from 'claude-code'
+import type { Elements, HttpInit, HttpResponse, Register, RenderElement, RenderSurface } from 'claude-code'
 
 import {
   answerId,
@@ -66,6 +69,10 @@ const HOLD_BUDGET_MARGIN_MS = 4000
 const THINKING_MAX_PENDING = 24
 /** Reply blocks remembered with the thoughts that came before them. */
 const MAX_ATTACHED = 50
+/** Prompt rows and tool calls remembered as drawn (where live thoughts may go under them). */
+const MAX_ROWS = 1000
+/** How much of a prompt is compared to find its row. */
+const PROMPT_KEY_CHARS = 2000
 export const PANE_ID = 'thinking-ko'
 export const COMMAND = 'thinking-ko'
 /** Shown when thinking blocks arrive without their text (thinking summaries off). */
@@ -143,6 +150,25 @@ type InlineThought = Thought | { ko: string }
 /** A reply block of this run and the thoughts that came before it in its turn. */
 type Attached = { turnId: string; text: string; isOpen: boolean; thoughts: Thought[]; requestId?: string }
 
+/** A row of the turn that live thoughts may be drawn under: its prompt (by text), or a tool call. */
+type Anchor = { kind: 'prompt'; key: string } | { kind: 'tool'; id: string }
+
+/** Where the live thoughts are drawn off the terminal: under a prompt row, a tool row or a folded group. */
+type Spot = { site: 'UserMessage'; requestId: string } | { site: 'ToolUse' | 'ToolGroup'; id: string }
+
+/** The elements the thought blocks are drawn with (every surface has them). */
+type Els = Pick<Elements[RenderSurface], 'Box' | 'Button' | 'Markdown' | 'Text'>
+
+/** A prompt as compared with its row: spaces folded, its start only (a pasted prompt can be long). */
+function promptKey(text: string): string {
+  return sameTextKey(text.slice(0, PROMPT_KEY_CHARS * 2)).slice(0, PROMPT_KEY_CHARS)
+}
+
+/** Whether one text is the other, or holds it (a prompt row may show less or more than the turn's text). */
+function sameish(a: string, b: string): boolean {
+  return a === b || (Math.min(a.length, b.length) >= 8 && (a.includes(b) || b.includes(a)))
+}
+
 function optionText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
@@ -182,6 +208,14 @@ export const register: Register = (on, options) => {
   let summariesWritten = false
   /** The band shows only the latest line of thinking (the person folded it). */
   let collapsed = false
+  /** The rows of each turn its live thoughts may be drawn under, in stream order (the current turn's). */
+  const anchors = new Map<string, Anchor[]>()
+  /** Prompt rows drawn off the terminal, in the order first drawn: their text (promptKey). */
+  const userRows = new Map<string, string>()
+  /** Counts the rows added to userRows. */
+  let userSeq = 0
+  /** Tool calls whose row was drawn off the terminal: on a row of its own, or in a folded group. */
+  const toolRows = new Map<string, 'use' | 'group'>()
 
   const need = (): Io => {
     if (!io) throw new Error('no engine handle yet')
@@ -438,6 +472,87 @@ export const register: Register = (on, options) => {
     redraw()
   }
 
+  /** The current turn's thoughts no reply text has followed yet, as drawn live (latest lines). */
+  const liveShown = (maxLines = LIVE_MAX_LINES): { text: string; cut: boolean } => {
+    const pending = (currentTurn === undefined ? [] : (unplaced.get(currentTurn) ?? [])).filter(t => !t.gone)
+    return pending.length > 0 ? thoughtsText(pending, maxLines, LIVE_FOLDED_LINES) : { text: '', cut: false }
+  }
+
+  /** The live thoughts: a dim `✻ 생각` header with the fold button, then the latest lines. */
+  const liveBlock = (els: Els, shown: { text: string; cut: boolean }): RenderElement => {
+    const { Box, Button, Markdown, Text } = els
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row">
+          <Box flexGrow={1}>
+            <Text dimColor>✻ 생각{shown.cut && !collapsed ? ` · 앞부분은 /${COMMAND}` : ''}</Text>
+          </Box>
+          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
+        </Box>
+        <Markdown text={shown.text} />
+      </Box>
+    )
+  }
+
+  /** The last answer of promptRow, good until a row is drawn for the first time. */
+  let promptFound: { key: string; seq: number; requestId: string | undefined } | undefined
+
+  /** The newest prompt row drawn whose text is the turn's prompt. */
+  const promptRow = (key: string): string | undefined => {
+    if (promptFound?.key === key && promptFound.seq === userSeq) return promptFound.requestId
+    let requestId: string | undefined
+    for (const [id, rowKey] of userRows) if (sameish(rowKey, key)) requestId = id // drawn in order: the last is the newest
+    promptFound = { key, seq: userSeq, requestId }
+    return requestId
+  }
+
+  /**
+   * Where the current turn's live thoughts go off the terminal: under the latest of its prompt and
+   * tool calls whose row is drawn; undefined while none is.
+   */
+  const liveSpot = (): Spot | undefined => {
+    const list = (currentTurn === undefined ? undefined : anchors.get(currentTurn)) ?? []
+    for (let i = list.length - 1; i >= 0; i--) {
+      const a = list[i]!
+      if (a.kind === 'tool') {
+        const site = toolRows.get(a.id)
+        if (site) return { site: site === 'use' ? 'ToolUse' : 'ToolGroup', id: a.id }
+      } else {
+        const requestId = promptRow(a.key)
+        if (requestId !== undefined) return { site: 'UserMessage', requestId }
+      }
+    }
+    return undefined
+  }
+
+  const spotKey = (s: Spot | undefined): string => (s === undefined ? '' : s.site === 'UserMessage' ? `u:${s.requestId}` : `${s.site}:${s.id}`)
+
+  /** Notes a row as drawn; when that moves the live thoughts, everything is drawn again. */
+  const noteRow = (add: () => boolean): void => {
+    const before = spotKey(liveSpot())
+    if (add() && spotKey(liveSpot()) !== before) redraw()
+  }
+
+  const notePrompt = (requestId: string, text: string): void =>
+    noteRow(() => {
+      if (userRows.has(requestId)) return false
+      userRows.set(requestId, promptKey(text))
+      userSeq++
+      if (userRows.size > MAX_ROWS) userRows.delete(userRows.keys().next().value!)
+      return true
+    })
+
+  // A call drawn on a row of its own stays there (a group that unfolds draws its calls as rows);
+  // never back, so a surface drawing both cannot bounce the thoughts between them.
+  const noteTool = (id: string, site: 'use' | 'group'): void =>
+    noteRow(() => {
+      const had = toolRows.get(id)
+      if (had === site || had === 'use') return false
+      toolRows.set(id, site)
+      if (toolRows.size > MAX_ROWS) toolRows.delete(toolRows.keys().next().value!)
+      return true
+    })
+
   /**
    * The thoughts above the reply block `requestId`: the ones that came before it in its turn,
    * matched by its text (claimed for good once the block is complete), else those cached for it.
@@ -560,6 +675,9 @@ export const register: Register = (on, options) => {
     thoughts.length = 0
     unplaced.clear()
     attached.length = 0
+    anchors.clear()
+    userRows.clear()
+    toolRows.clear()
     currentTurn = undefined
     await flushLog()
     return next(e)
@@ -584,6 +702,9 @@ export const register: Register = (on, options) => {
     }
     armed = true
     currentTurn = e.turnId
+    // Its live thoughts go under its prompt row first (a turn without typed text has none).
+    anchors.clear()
+    anchors.set(e.turnId, e.text.trim() ? [{ kind: 'prompt', key: promptKey(e.text) }] : [])
     redraw()
     return next(e)
   })
@@ -636,6 +757,12 @@ export const register: Register = (on, options) => {
               changed = true
             }
           }
+        }
+        // Off the terminal, the thoughts that follow a tool call go under its row once it is drawn.
+        if (thinking !== undefined && chunk.kind === 'tool') {
+          const list = anchors.get(e.turnId) ?? []
+          list.push({ kind: 'tool', id: chunk.id })
+          anchors.set(e.turnId, list)
         }
         if (thinking !== undefined) {
           if (chunk.kind === 'thinking') {
@@ -738,32 +865,100 @@ export const register: Register = (on, options) => {
   // followed yet drawn above it in Korean as they come in.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     noteSite(`site=Spinner surface=${e.surface}`)
-    const pending = (currentTurn === undefined ? [] : (unplaced.get(currentTurn) ?? [])).filter(t => !t.gone)
-    if (pending.length === 0) return next(e)
-    const shown = thoughtsText(pending, LIVE_MAX_LINES, LIVE_FOLDED_LINES)
+    // The desktop draws its progress row on one line: the thoughts go under a transcript row there.
+    if (e.surface !== 'terminal') return next(e)
+    const shown = liveShown()
     if (!shown.text) return next(e)
     noteSite(`live-thinking site=Spinner surface=${e.surface}`)
     const row = await next(e)
-    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          <Box flexGrow={1}>
-            <Text dimColor>✻ 생각{shown.cut && !collapsed ? ` · 앞부분은 /${COMMAND}` : ''}</Text>
-          </Box>
-          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
-        </Box>
-        <Markdown text={shown.text} />
+        {liveBlock(els, shown)}
         {row}
       </Box>
     )
   })
 
-  // The band above the prompt: only when thinking arrives without text, a note (and, while the
-  // setting is not on, a button that turns thinking summaries on).
+  // Off the terminal, the turn's prompt row with its live thoughts under it, until a tool call or
+  // reply text follows them.
+  on('ui.render', { component: 'UserMessage', surface: ['desktop', 'vscode', 'mobile'] }, async ($, e, next) => {
+    noteSite(`site=UserMessage surface=${e.surface}`)
+    notePrompt(e.requestId, e.props.text)
+    const spot = liveSpot()
+    if (spot?.site !== 'UserMessage' || spot.requestId !== e.requestId) return next(e)
+    const shown = liveShown()
+    if (!shown.text) return next(e)
+    noteSite(`live-thinking site=UserMessage surface=${e.surface}`)
+    const row = await next(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
+    return (
+      <Box flexDirection="column">
+        {row}
+        {liveBlock(els, shown)}
+      </Box>
+    )
+  })
+
+  // Off the terminal, the turn's latest tool call with the live thoughts that followed it.
+  on('ui.render', { component: 'ToolUse', surface: ['desktop', 'vscode', 'mobile'] }, async ($, e, next) => {
+    noteSite(`site=ToolUse surface=${e.surface}`)
+    noteTool(e.props.tool_use_id, 'use')
+    const spot = liveSpot()
+    if (spot?.site !== 'ToolUse' || spot.id !== e.props.tool_use_id) return next(e)
+    const shown = liveShown()
+    if (!shown.text) return next(e)
+    noteSite(`live-thinking site=ToolUse surface=${e.surface}`)
+    const row = await next(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
+    return (
+      <Box flexDirection="column">
+        {row}
+        {liveBlock(els, shown)}
+      </Box>
+    )
+  })
+
+  // The same for a call folded into a group's one line (reads, searches).
+  on('ui.render', { component: 'ToolGroup', surface: ['desktop', 'vscode', 'mobile'] }, async ($, e, next) => {
+    noteSite(`site=ToolGroup surface=${e.surface}`)
+    if (e.props.isExpanded) return next(e)
+    const ids = e.props.calls.flatMap(c => (c.tool_use_id === undefined ? [] : [c.tool_use_id]))
+    for (const id of ids) noteTool(id, 'group')
+    const spot = liveSpot()
+    if (spot?.site !== 'ToolGroup' || !ids.includes(spot.id)) return next(e)
+    const shown = liveShown()
+    if (!shown.text) return next(e)
+    noteSite(`live-thinking site=ToolGroup surface=${e.surface}`)
+    const row = await next(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
+    return (
+      <Box flexDirection="column">
+        {row}
+        {liveBlock(els, shown)}
+      </Box>
+    )
+  })
+
+  // The band above the prompt: off the terminal, the live thoughts while no row of the turn is
+  // known to draw them under; when thinking arrives without text, a note (and, while the setting
+  // is not on, a button that turns thinking summaries on).
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    noteSite(`site=AbovePrompt surface=${e.surface}`)
     if (e.props.hasSurvey) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Button, Text } = els
+    if (e.surface !== 'terminal' && liveSpot() === undefined) {
+      const shown = liveShown(Math.max(3, Math.min(LIVE_MAX_LINES, e.props.maxRows - 2)))
+      if (shown.text) {
+        noteSite(`live-thinking site=AbovePrompt surface=${e.surface}`)
+        return liveBlock(els, shown)
+      }
+    }
     if (summariesWritten) {
       return (
         <Box flexDirection="column">
