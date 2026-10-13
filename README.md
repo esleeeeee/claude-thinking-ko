@@ -4,7 +4,13 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 원본은 OMP(oh-my-pi)용 확장 [hvvsdcm/omp-thinking-ko](https://github.com/hvvsdcm/omp-thinking-ko)(MIT)이고, 이 저장소는 그 포크를 Claude Code mod로 옮긴 것입니다. 원래 OMP 버전은 [`legacy/`](legacy/)에 그대로 보존돼 있습니다.
 
-> **꼭 켤 설정:** 생각을 번역하려면 `~/.claude/settings.json`에 `"showThinkingSummaries": true`가 있어야 합니다. 이 설정이 꺼져 있으면(기본값) Claude Code가 생각 텍스트 자체를 받아 오지 않아서 옮길 원문이 없습니다. 자세한 건 [설정](#설정)을 보세요.
+## 빠른 시작 (3단계)
+
+1. **마켓플레이스 추가:** Claude 앱(Code 탭)의 플러그인 메뉴에서 마켓플레이스를 추가하고 `esleeeeee/claude-thinking-ko`를 넣습니다. 받지 않으면 `https://github.com/esleeeeee/claude-thinking-ko.git`를 넣으세요. 터미널을 쓴다면 `/plugin install thinking-ko --marketplace esleeeeee/claude-thinking-ko` 한 줄로 끝납니다.
+2. **thinking-ko 설치:** 플러그인 목록에서 thinking-ko를 고르고 **사용자(본인 계정) 범위**로 설치합니다. Gemini 키를 묻는 칸은 비워 두면 됩니다(Haiku 사용).
+3. **생각 요약 켜기:** 설치 후 입력창 위 띠에 `[생각 요약 켜기]` 버튼이 뜨면 누르고 Claude Code(앱)를 **완전히 껐다 켭니다.** 버튼은 `~/.claude/settings.json`에 `"showThinkingSummaries": true` 한 줄만 더합니다(원래 파일은 `settings.json.thinking-ko.bak`로 백업).
+
+이제 생각이 필요한 질문을 보내면, 입력창 위 띠에 한국어 생각이 뜨고 답변도 반말로 바뀝니다. 앱은 **로컬 세션**에서만 동작합니다(클라우드 세션 제외).
 
 > **설치 전 확인:** 생각·답변 원문이 번역을 위해 별도 모델 요청으로 전송됩니다(기본: 내 Claude 계정의 Haiku, 옵션: Google Gemini API). 생각·답변에 코드·비밀값이 들어 있으면 함께 전송될 수 있으니 민감한 작업에는 쓰지 마세요. 번역 요청만큼 사용량·비용이 늘어납니다.
 
@@ -74,30 +80,24 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 ## 설치
 
-### 마켓플레이스로 설치 (권장)
+위 [빠른 시작](#빠른-시작-3단계)이 기본 방법입니다.
 
-Claude Code 프롬프트에서:
+- **앱과 터미널은 설정을 함께 씁니다.** 사용자 범위로 설치하면 터미널(`claude`), 데스크톱 앱의 로컬 세션, VS Code에서 모두 켜집니다.
+- **업데이트:** 플러그인 관리 메뉴(앱: **+ → Plugins → Manage plugins**, 터미널: `/plugin`)에서 업데이트하거나, 터미널에서 `claude plugin update thinking-ko@claude-thinking-ko`를 실행합니다.
+- **개발·시험용으로 폴더에서 바로 실행:**
 
-```text
-/plugin install thinking-ko --marketplace esleeeeee/claude-thinking-ko
-```
+  ```sh
+  git clone https://github.com/esleeeeee/claude-thinking-ko
+  claude --plugin-dir ./claude-thinking-ko
+  ```
 
-마켓플레이스 추가를 물으면 `y`, 이어서 설치 범위(사용자 범위 권장)를 고릅니다. 설정 화면이 나오면 Gemini 키는 비워 두면 됩니다(Haiku 사용). 설치 직후 그 세션부터 적용됩니다.
-
-### 폴더에서 바로 실행 (개발·시험용)
-
-```sh
-git clone https://github.com/esleeeeee/claude-thinking-ko
-claude --plugin-dir ./claude-thinking-ko
-```
-
-`--plugin-dir`은 그 세션에만 적용됩니다. 대화형 세션에서는 파일을 고치면 자동으로 다시 불러옵니다. 마켓플레이스 설치와 `--plugin-dir`을 **동시에 쓰지 마세요**(번역 요청이 두 번 나갈 수 있습니다).
+  `--plugin-dir`은 그 세션에만 적용됩니다. 설치본과 `--plugin-dir`을 **동시에 쓰지 마세요**(번역 요청이 두 번 나갈 수 있습니다).
 
 ## 설정
 
 ### 생각 요약 켜기 (생각 번역에 필요)
 
-`~/.claude/settings.json`(Windows는 `%USERPROFILE%\.claude\settings.json`)에 다음 줄을 넣고 Claude Code를 다시 켭니다. 이미 다른 설정이 있으면 중괄호 안에 이 항목만 추가하세요.
+Claude Code는 기본값에서 생각 텍스트를 받아 오지 않습니다. 띠의 `[생각 요약 켜기]` 버튼을 누르는 게 가장 쉽습니다. 직접 하려면 `~/.claude/settings.json`(Windows는 `%USERPROFILE%\.claude\settings.json`)에 아래 항목을 넣고 Claude Code를 다시 켜세요. 이미 다른 설정이 있으면 중괄호 안에 이 항목만 추가합니다(앞 항목 뒤에 쉼표).
 
 ```json
 { "showThinkingSummaries": true }
@@ -183,6 +183,8 @@ claude plugin test .
 
 클라우드 세션에서는 mod 화면이 그려지지 않아 아래는 직접 확인이 필요합니다.
 
+(앱으로 설치했다면 3~13번만 앱의 로컬 세션에서 확인하면 됩니다.)
+
 1. `claude --version`이 2.1.287 이상인지 확인.
 2. 저장소 폴더에서 `claude plugin validate --strict .`와 `claude plugin test .`가 통과하는지 확인.
 3. `~/.claude/settings.json`에 `"showThinkingSummaries": true`를 넣고 `claude --plugin-dir /path/to/claude-thinking-ko`로 시작. 시작 화면이나 `claude --debug` 로그에 thinking-ko 로드 오류(`ui.render (AssistantMessage) refused` 등)가 없는지 확인.
@@ -192,7 +194,7 @@ claude plugin test .
    - 잠시 뒤 반말 한국어(`햇어`, `잇어` 같은 표기)로 바뀌는지.
    - **생각:** 생각이 필요한 질문(예: "How many n < 1000 have n^2+1 divisible by 5 and n not divisible by 3? Think it through.")을 보내서 프롬프트 위 띠가 `✻ 생각 중..` → `✻ 생각 옮기는 중..` → 한국어 생각으로 바뀌는지.
    - `/thinking-ko`로 패널이 열리고 최근 생각 번역이 쌓이는지.
-   - `showThinkingSummaries`를 빼고 재시작하면 띠에 설정 안내 문구가 뜨는지.
+   - `showThinkingSummaries`를 빼고 재시작하면 띠에 `[생각 요약 켜기]` 버튼이 뜨는지, 누르면 `settings.json`에 그 한 줄만 추가되고 `.thinking-ko.bak` 백업이 생기는지.
 5. 코드 블록·경로·명령어·URL·숫자가 들어간 답변을 받아서 그 부분이 그대로인지 확인.
 6. **ctrl+o**(상세 보기)로 원문이 그대로 남아 있는지, 다음 질문에서 Claude가 영어 원문 기준으로 대화를 이어 가는지 확인(대화 기록 무변경).
 7. 도구 호출이 섞인 작업(파일 읽기 등)을 시켜서 도구 사이의 글도 번역되는지, 화면이 깨지지 않는지 확인.
