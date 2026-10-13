@@ -4,13 +4,17 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 원본은 OMP(oh-my-pi)용 확장 [hvvsdcm/omp-thinking-ko](https://github.com/hvvsdcm/omp-thinking-ko)(MIT)이고, 이 저장소는 그 포크를 Claude Code mod로 옮긴 것입니다. 원래 OMP 버전은 [`legacy/`](legacy/)에 그대로 보존돼 있습니다.
 
-## 빠른 시작 (3단계)
+## 빠른 시작 (2단계)
 
 1. **마켓플레이스 추가:** Claude 앱(Code 탭)의 플러그인 메뉴에서 마켓플레이스를 추가하고 `esleeeeee/claude-thinking-ko`를 넣습니다. 받지 않으면 `https://github.com/esleeeeee/claude-thinking-ko.git`를 넣으세요. 터미널을 쓴다면 `/plugin install thinking-ko --marketplace esleeeeee/claude-thinking-ko` 한 줄로 끝납니다.
 2. **thinking-ko 설치:** 플러그인 목록에서 thinking-ko를 고르고 **사용자(본인 계정) 범위**로 설치합니다. Gemini 키를 묻는 칸은 비워 두면 됩니다(Haiku 사용).
-3. **(터미널만) 생각 요약 켜기:** 데스크톱 앱은 생각 요약이 원래 켜져 있어서 이 단계가 필요 없습니다. 생각이 텍스트 없이 들어오면 입력창 위에 `[생각 요약 켜기]` 버튼이 뜹니다. 그때 누르고 Claude Code를 **껐다 켭니다.** 버튼은 `~/.claude/settings.json`에 `"showThinkingSummaries": true` 한 줄만 더합니다(원래 파일은 `settings.json.thinking-ko.bak`로 백업).
 
-이제 생각이 필요한 질문을 보내면, Claude가 생각하는 **도중에** 대화창의 진행 줄 위에 한국어 생각이 문장 단위로 쌓이고, Claude가 글을 쓰면 그 생각이 해당 글 위로 옮겨 붙습니다(한국어 생각이 먼저 보이도록 답변이 최대 3초 기다립니다). 답변도 반말로 바뀝니다. 길면 `[접기]`를 누르세요. 앱은 **로컬 세션**에서만 동작합니다(클라우드 세션 제외).
+생각 번역에 필요한 **생각 요약 설정은 플러그인이 알아서 켭니다.** 처음 시작할 때 어느 설정에도 값이 없으면 `~/.claude/settings.json`에 `"showThinkingSummaries": true` 한 줄만 더하고(원래 파일은 `settings.json.thinking-ko.bak`로 백업) 알림을 한 번 띄웁니다. 직접 정해 둔 값(`false` 포함)은 건드리지 않습니다. 그 뒤에도 생각이 안 보이면 Claude Code를 **완전히 껐다 켜세요.**
+
+이제 생각이 필요한 질문을 보내면, Claude가 생각하는 **도중에** 대화창에 한국어 생각이 문장 단위로 여러 줄 쌓이고, Claude가 글을 쓰면 그 생각이 해당 글 위로 옮겨 붙습니다(한국어 생각이 먼저 보이도록 답변이 최대 3초 기다립니다). 답변도 반말로 바뀝니다. 길면 `[접기]`를 누르세요. 앱은 **로컬 세션**에서만 동작합니다(클라우드 세션 제외).
+
+- **데스크톱 앱:** 내가 보낸 질문 바로 아래에 쌓입니다. Claude가 도구를 쓰면(파일 읽기, 명령 실행 등) 그 뒤의 생각은 방금 쓴 도구 줄 아래로 따라 내려갑니다. 앱의 진행 줄(`443 토큰 · 생각 중`)은 한 줄짜리라 건드리지 않습니다.
+- **터미널:** 대화창 맨 아래 진행 줄(`Running … 24초`) 바로 위에 쌓입니다.
 
 > **설치 전 확인:** 생각·답변 원문이 번역을 위해 별도 모델 요청으로 전송됩니다(기본: 내 Claude 계정의 Haiku, 옵션: Google Gemini API). 생각·답변에 코드·비밀값이 들어 있으면 함께 전송될 수 있으니 민감한 작업에는 쓰지 마세요. 번역 요청만큼 사용량·비용이 늘어납니다.
 
@@ -19,13 +23,15 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 ### 생각(thinking)
 
 - Claude가 생각하는 **도중에**, 문장이 끝날 때마다(끝난 문장이 40자 이상 모이면, 또는 문단이 끝나면) 바로 한국어 혼잣말로 옮겨 **대화창**에 보여 줍니다. 생각이 길게 한 문단으로 이어져도 번역이 계속 따라옵니다.
-  - 작업 중: 대화창 맨 아래의 진행 줄(예: `Running tests … 24초`, 앱에서는 영어 생각 줄 바로 아래의 `53초 · 생각 중` 줄) **바로 위에** 이번 턴의 생각이 실시간으로 쌓입니다(최신 20줄, 접혀 있으면 마지막 3줄). 엔진의 진행 줄은 그대로 아래에 남습니다.
+  - 작업 중에는 이번 턴의 생각이 대화창에 실시간으로 쌓입니다(최신 20줄, 접혀 있으면 마지막 3줄).
+    - 데스크톱 앱: 이번 턴에서 생각 바로 앞에 있는 줄 **아래에** 쌓입니다. 처음엔 내가 보낸 질문 아래, Claude가 도구를 부른 뒤에는 그 도구 줄(읽기·검색이 한 줄로 묶이면 그 묶음 줄) 아래입니다. 앱의 진행 줄은 한 줄짜리라 손대지 않습니다. 그 줄을 아직 못 찾았을 때(입력 없이 이어진 턴 등)만 입력창 바로 위에 대신 보여 줍니다.
+    - 터미널: 대화창 맨 아래 진행 줄(예: `Running tests … 24초`) **바로 위에** 쌓입니다. 진행 줄은 그대로 아래에 남습니다.
   - **생각이 먼저:** 생각 블록이 끝나면 그 생각의 마지막 번역이 나올 때까지 **답변(또는 도구 호출)이 최대 3초 기다렸다가** 나옵니다. 그래서 한국어 생각이 답변보다 먼저 보입니다. 글자는 하나도 바꾸지 않고 내보내는 시점만 늦추며, Claude 작업이 생각 블록마다 최대 3초 느려질 수 있습니다. 옵션 `thinking_first`로 끌 수 있습니다.
-  - Claude가 글을 쓰기 시작하면: 그 앞의 생각들이 진행 줄에서 빠지고, 그 **글(답변) 맨 위**에 `✻ 생각` 묶음으로 옮겨 붙습니다. 도구 호출 앞에 한 생각은 같은 턴에서 다음에 나오는 글 위에, 글 없이 턴이 끝나면 그 턴의 마지막 글 위에 붙습니다.
+  - Claude가 글을 쓰기 시작하면: 그 앞의 생각들이 실시간 자리에서 빠지고, 그 **글(답변) 맨 위**에 `✻ 생각` 묶음으로 옮겨 붙습니다. 도구 호출 앞에 한 생각은 같은 턴에서 다음에 나오는 글 위에, 글 없이 턴이 끝나면 그 턴의 마지막 글 위에 붙습니다.
   - 아직 들어오는 중인 부분은 `_생각 중.._`, 번역을 기다리는 문단은 `_생각 옮기는 중.._`으로 보입니다. 번역이 끝내 실패한 문단은 `(번역 실패, 원문)` 표시와 함께 원문을 보여 줍니다.
-  - 생각 묶음 옆 `[접기]`를 누르면 마지막 한 줄만 보이고, `[펼치기]`로 다시 펼칩니다. 접은 상태는 모든 묶음에 함께 적용되고 다음 세션에도 기억합니다.
+  - 생각 묶음 옆 `[접기]`를 누르면 마지막 줄만 보이고(답변 위 묶음은 한 줄, 실시간 묶음은 세 줄), `[펼치기]`로 다시 펼칩니다. 접은 상태는 모든 묶음에 함께 적용되고 다음 세션에도 기억합니다.
   - 답변 위에 붙은 생각 번역은 캐시돼, 세션을 재개해도 다시 보입니다.
-  - 옵션 `thinking_in_reply`를 끄면 답변 위에 붙이지 않습니다(진행 줄 위 실시간 표시와 패널만).
+  - 옵션 `thinking_in_reply`를 끄면 답변 위에 붙이지 않습니다(작업 중 실시간 표시와 패널만).
 - `/thinking-ko`를 입력하면 최근 생각 20개의 번역을 **패널**로 볼 수 있습니다.
 - 생각 번역 프롬프트는 원본 OMP 버전의 생각용 프롬프트·예시를 그대로 씁니다.
 
@@ -61,8 +67,9 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 ### 생각 번역 방식
 
-- **생각은 제자리에서 바꾸지 못합니다.** Claude Code의 mod API에는 thinking 블록을 그리는 렌더 자리가 없습니다. 그래서 원래 생각 줄은 영어 그대로 두고, 번역은 대화창의 진행 줄 위(실시간)와 뒤따르는 글 위, `/thinking-ko` 패널에 보여 줍니다.
-- **생각 요약 설정이 필요합니다.** 데스크톱 앱은 원래 켜져 있습니다. 터미널 Claude Code는 기본값에서 생각 텍스트를 받아 오지 않습니다(`showThinkingSummaries` 꺼짐). 2.1.296에서 확인한 결과, 꺼져 있으면 생각 블록이 서명만 있고 텍스트가 빈 채로 옵니다. 켜면(`--thinking-display summarized`와 같은 효과) 텍스트가 오고 mod가 번역합니다. 생각이 텍스트 없이 들어오면 띠에 안내와 켜기 버튼을 보여 줍니다(설정 파일만 보고 판단하지 않습니다).
+- **생각은 제자리에서 바꾸지 못합니다.** Claude Code의 mod API에는 thinking 블록을 그리는 렌더 자리가 없습니다. 그래서 원래 생각 줄은 영어 그대로 두고, 번역은 대화창(실시간: 터미널은 진행 줄 위, 앱은 질문·도구 줄 아래)과 뒤따르는 글 위, `/thinking-ko` 패널에 보여 줍니다. 앱에서는 작업 중에 한국어 생각이 질문 바로 아래(영어 생각 줄이 있으면 그보다 위)에 보였다가, Claude가 글을 쓰면 그 글 위로 옮겨 갑니다.
+- **데스크톱 앱 화면은 이 저장소에서 직접 확인하지 못했습니다.** 앱이 질문 줄·도구 줄에 덧붙인 그림을 어떻게 그리는지는 앱이 정합니다. 위치가 이상하면 아래 로그의 `live-thinking site=…` 줄을 함께 알려 주세요.
+- **생각 요약 설정이 필요합니다.** 터미널 Claude Code는 기본값에서 생각 텍스트를 받아 오지 않습니다(`showThinkingSummaries` 꺼짐). 2.1.296에서 확인한 결과, 꺼져 있으면 생각 블록이 서명만 있고 텍스트가 빈 채로 옵니다. 켜면(`--thinking-display summarized`와 같은 효과) 텍스트가 오고 mod가 번역합니다. 그래서 mod가 시작할 때 이 설정을 켭니다(직접 정한 값이 없을 때만). 그래도 생각이 텍스트 없이 들어오면 입력창 위에 안내를 보여 줍니다(설정이 꺼져 있으면 켜기 버튼도).
 - **번역 대상은 API가 주는 생각 요약입니다.** 요즘 Claude 모델은 생각 전문이 아니라 요약본을 돌려주고, Claude Code 화면에 보이는 생각도 같은 요약본입니다. 이 mod는 그 요약본을 옮깁니다.
 - 메인 대화의 생각만 옮깁니다(서브에이전트 생각 제외). 생각 뒤에 답변 글이 없이 턴이 끝나면 그 생각은 `/thinking-ko` 패널에서만 보입니다. 패널 목록은 세션을 재개하면 비어 있습니다.
 
@@ -83,7 +90,7 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 ## 설치
 
-위 [빠른 시작](#빠른-시작-3단계)이 기본 방법입니다.
+위 [빠른 시작](#빠른-시작-2단계)이 기본 방법입니다.
 
 - **앱과 터미널은 설정을 함께 씁니다.** 사용자 범위로 설치하면 터미널(`claude`), 데스크톱 앱의 로컬 세션, VS Code에서 모두 켜집니다.
 - **업데이트:** 플러그인 관리 메뉴(앱: **+ → Plugins → Manage plugins**, 터미널: `/plugin`)에서 업데이트하거나, 터미널에서 `claude plugin update thinking-ko@claude-thinking-ko`를 실행합니다.
@@ -98,9 +105,11 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 ## 설정
 
-### 생각 요약 켜기 (생각 번역에 필요)
+### 생각 요약 켜기 (생각 번역에 필요, 자동)
 
-데스크톱 앱은 원래 켜져 있어서 할 일이 없습니다. 터미널 Claude Code는 기본값에서 생각 텍스트를 받아 오지 않습니다. 입력창 위 띠의 `[생각 요약 켜기]` 버튼을 누르는 게 가장 쉽습니다. 직접 하려면 `~/.claude/settings.json`(Windows는 `%USERPROFILE%\.claude\settings.json`)에 아래 항목을 넣고 Claude Code를 다시 켜세요. 이미 다른 설정이 있으면 중괄호 안에 이 항목만 추가합니다(앞 항목 뒤에 쉼표).
+할 일이 없습니다. mod가 시작할 때 어느 설정(사용자·프로젝트·관리 설정 등)에도 `showThinkingSummaries` 값이 없으면, `~/.claude/settings.json`(Windows는 `%USERPROFILE%\.claude\settings.json`)을 `settings.json.thinking-ko.bak`로 백업한 뒤 아래 한 줄만 더하고 알림을 한 번 띄웁니다. 파일이 JSON으로 읽히지 않으면 건드리지 않습니다. 사용자 파일에 이미 값이 있으면(`false` 포함) 그대로 둡니다. 자동으로 켜지 않게 하려면 옵션 `auto_thinking_summaries`를 끄세요.
+
+직접 하려면 그 파일에 아래 항목을 넣고 Claude Code를 다시 켜세요. 이미 다른 설정이 있으면 중괄호 안에 이 항목만 추가합니다(앞 항목 뒤에 쉼표).
 
 ```json
 { "showThinkingSummaries": true }
@@ -108,7 +117,8 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 
 - Claude Code 공식 설정으로, "API에 생각 요약을 요청해서 대화와 상세 보기(ctrl+o)에 보여 준다"는 뜻입니다.
 - 한 번만 시험하려면 실행할 때 `claude --thinking-display summarized`를 붙여도 됩니다.
-- 생각 자체가 나와야 하므로, 생각을 아예 안 하는 짧은 질문에서는 띠에 아무것도 안 뜰 수 있습니다. `/config`에서 생각(thinking)을 켜 두거나 생각이 필요한 질문으로 확인하세요.
+- 생각 자체가 나와야 하므로, 생각을 아예 안 하는 짧은 질문에서는 아무것도 안 뜰 수 있습니다. `/config`에서 생각(thinking)을 켜 두거나 생각이 필요한 질문으로 확인하세요.
+- 설정이 켜져 있는데도 생각이 비어서 오면(앱이 예전에 정한 값이 남아 있을 때) 입력창 위에 Claude Code를 완전히 껐다 켜라는 안내가 뜹니다.
 
 ### mod 옵션
 
@@ -116,8 +126,9 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 | --- | --- | --- |
 | `gemini_api_key` | (비어 있음) | 비우면 Claude Haiku로 번역. 넣으면 Gemini 공식 API(`generativelanguage.googleapis.com`)로 번역. 민감 값으로 표시돼 있어 설치형 플러그인은 보안 저장소에 보관됩니다. |
 | `gemini_model` | `gemini-flash-latest` | 키가 있을 때 쓸 Gemini 모델 |
-| `thinking_in_reply` | 켜짐 | 생각 번역을 뒤따르는 글(답변) 맨 위에 붙임. 끄면 진행 줄 위 실시간 표시와 패널만 |
+| `thinking_in_reply` | 켜짐 | 생각 번역을 뒤따르는 글(답변) 맨 위에 붙임. 끄면 작업 중 실시간 표시와 패널만 |
 | `thinking_first` | 켜짐 | 생각 블록이 끝나면 그 번역이 나올 때까지 답변·도구 호출이 최대 3초 기다림(한국어 생각을 먼저 보이게). 끄면 기다리지 않음 |
+| `auto_thinking_summaries` | 켜짐 | 어느 설정에도 `showThinkingSummaries`가 없으면 시작할 때 `~/.claude/settings.json`에 켜 둠(백업 후 한 줄만). 끄면 손대지 않음 |
 | `claude_model` | `haiku` | 키가 없을 때 쓸 Claude 모델(별칭 또는 전체 id) |
 
 - **기본(Haiku):** 아무것도 설정하지 않으면 `$.model.complete`로 세션의 Claude 클라이언트를 통해 Haiku를 부릅니다.
@@ -157,8 +168,8 @@ Claude Code에서 Claude의 **생각(thinking)** 과 **답변**을 반말·구�
 .claude-plugin/plugin.json       mod 매니페스트(userConfig 포함)
 .claude-plugin/marketplace.json  이 저장소를 마켓플레이스로 쓰기 위한 파일
 hooks/hooks.json                 훅 모듈 지정
-hooks/register.tsx               훅 연결: ui.render(AssistantMessage·AbovePrompt·Pane), turn.start/step,
-                                 session.start/end, /thinking-ko 명령
+hooks/register.tsx               훅 연결: ui.render(AssistantMessage·Spinner·UserMessage·ToolUse·ToolGroup·
+                                 AbovePrompt·Pane), turn.start/step/complete, session.start/end, /thinking-ko 명령
 hooks/core.ts                    $에 의존하지 않는 로직: 프롬프트, 큐, 슬롯, 타임아웃, 재시도, 정리
 hooks/translators.ts             Haiku($.model.complete) / Gemini($.http.fetch) 요청·응답 처리
 tests/*.test.ts                  claude plugin test용 테스트(모델·HTTP 모킹)
@@ -167,7 +178,7 @@ legacy/                          원래 OMP 확장과 테스트(변경 없음)
 
 - `ui.render`의 `AssistantMessage` 자리에서 `next({ ...e, props: { ...e.props, text } })`로 그릴 글만 바꿉니다. 엔진 문서상 이 방식은 그림만 바꾸고 저장된 메시지는 그대로 둡니다.
 - 번역 id는 `메시지 id + 원문 해시`입니다. 같은 메시지의 글이 바뀌면 다시 번역합니다.
-- 생각은 `turn.step` 스트림의 thinking 조각을 블록별로 모으면서, 빈 줄로 끝난 문단(코드 펜스 안은 제외)이나 뒤에 다음 문장이 이어진 끝난 문장들(40자 이상)이 생길 때마다 바로 번역을 맡깁니다. 조각마다 원문에서 다음 조각과의 사이(문단 사이·줄바꿈·공백)를 기억해 번역을 이어 붙입니다. 생각 블록이 끝나는 순간(다른 블록의 첫 조각이 왔을 때) 남은 부분을 맡기고, 그 생각의 번역이 끝날 때까지 그 조각을 최대 3초(훅 예산 10초 중 4초는 항상 남김) 붙잡았다가 그대로 내보냅니다. 블록이 끝나면 남은 부분도 맡깁니다. 아직 글이 뒤따르지 않은 생각은 엔진의 진행 줄(`Spinner`) 그림을 감싸 그 위에 그립니다(진행 줄 자체는 엔진 것 그대로). 같은 턴에서 생각 다음에 처음 시작되는 text 블록에 그 생각들을 묶어 두고, 그 답변 블록이 그려질 때 글이 같으면(공백 차이 무시, 요약 행이면 앞부분 일치) 엔진의 답변 그림 위에 생각 묶음을 얹습니다. 답변 블록·띠(`AbovePrompt`)·패널(`Pane`)은 번역 상태가 바뀔 때 `$.ui.invalidate`로 다시 그립니다.
+- 생각은 `turn.step` 스트림의 thinking 조각을 블록별로 모으면서, 빈 줄로 끝난 문단(코드 펜스 안은 제외)이나 뒤에 다음 문장이 이어진 끝난 문장들(40자 이상)이 생길 때마다 바로 번역을 맡깁니다. 조각마다 원문에서 다음 조각과의 사이(문단 사이·줄바꿈·공백)를 기억해 번역을 이어 붙입니다. 생각 블록이 끝나는 순간(다른 블록의 첫 조각이 왔을 때) 남은 부분을 맡기고, 그 생각의 번역이 끝날 때까지 그 조각을 최대 3초(훅 예산 10초 중 4초는 항상 남김) 붙잡았다가 그대로 내보냅니다. 블록이 끝나면 남은 부분도 맡깁니다. 아직 글이 뒤따르지 않은 생각은 터미널에서는 엔진의 진행 줄(`Spinner`) 그림을 감싸 그 위에 그립니다(진행 줄 자체는 엔진 것 그대로). 데스크톱 앱은 진행 줄을 한 줄로 그리므로, 터미널이 아닌 화면에서는 그 턴에서 생각 바로 앞에 그려진 줄의 그림을 감싸 그 아래에 그립니다: 턴의 질문 줄(`UserMessage`, turn.start의 글과 같은 가장 최근 줄), 그 뒤 도구를 부르면 그 도구 줄(`ToolUse`, 접힌 묶음이면 `ToolGroup`). 아직 그 줄이 안 그려졌으면 바로 앞 줄에, 아무 줄도 모르면 입력창 위 띠(`AbovePrompt`)에 그립니다. 같은 턴에서 생각 다음에 처음 시작되는 text 블록에 그 생각들을 묶어 두고, 그 답변 블록이 그려질 때 글이 같으면(공백 차이 무시, 요약 행이면 앞부분 일치) 엔진의 답변 그림 위에 생각 묶음을 얹습니다. 이 자리들과 패널(`Pane`)은 번역 상태가 바뀔 때 `$.ui.invalidate`로 다시 그립니다.
 
 검증:
 
@@ -192,14 +203,15 @@ claude plugin test .
 
 1. `claude --version`이 2.1.287 이상인지 확인.
 2. 저장소 폴더에서 `claude plugin validate --strict .`와 `claude plugin test .`가 통과하는지 확인.
-3. `~/.claude/settings.json`에 `"showThinkingSummaries": true`를 넣고 `claude --plugin-dir /path/to/claude-thinking-ko`로 시작. 시작 화면이나 `claude --debug` 로그에 thinking-ko 로드 오류(`ui.render (AssistantMessage) refused` 등)가 없는지 확인.
+3. `claude --plugin-dir /path/to/claude-thinking-ko`로 시작. 시작 화면이나 `claude --debug` 로그에 thinking-ko 로드 오류(`ui.render (AssistantMessage) refused` 등)가 없는지 확인. `showThinkingSummaries`를 정해 둔 적이 없으면 생각 요약을 켰다는 알림이 뜨고, `~/.claude/settings.json`에 그 한 줄만 더해지고 `settings.json.thinking-ko.bak` 백업이 생기는지 확인. 이미 `false`로 정해 두었으면 그대로인지.
 4. 영어로 답할 만한 질문을 보냄(예: "Explain what a race condition is in two sentences, in English.").
    - 답변이 생성되는 동안은 원문 그대로인지.
    - 블록이 끝나면 원문 끝에 `_옮기는 중.._`이 붙는지.
    - 잠시 뒤 반말 한국어로 바뀌는지, `햇어`·`잇어` 같은 틀린 표기가 없는지.
    - **생각:** 생각이 필요한 질문(예: "How many n < 1000 have n^2+1 divisible by 5 and n not divisible by 3? Think it through.")을 보내서 Claude가 생각하는 **도중에** 대화창 진행 줄 위에 한국어 생각이 문장 단위로 쌓이는지, 답변보다 한국어 생각이 먼저 보이는지, Claude가 글을 쓰면 그 위로 옮겨 붙는지, `[접기]`·`[펼치기]`가 되는지.
+   - **(데스크톱 앱 로컬 세션)** 같은 질문으로: 내가 보낸 질문 **바로 아래에** 한국어 생각이 여러 줄로 쌓이는지(한 줄로 잘리지 않는지), 앱의 진행 줄(`… 토큰 · 생각 중`)은 원래대로인지, 도구를 쓰는 작업이면 생각이 방금 쓴 도구 줄 아래로 따라 내려가는지, 글이 나오면 그 위로 옮겨 붙는지. 로그에 `render live-thinking site=UserMessage surface=desktop`(도구 뒤면 `site=ToolUse` 또는 `site=ToolGroup`)이 찍히는지.
    - `/thinking-ko`로 패널이 열리고 최근 생각 번역이 쌓이는지.
-   - (터미널) `showThinkingSummaries` 없이 실행하면 띠에 `[생각 요약 켜기]` 버튼이 뜨는지, 누르면 `settings.json`에 그 한 줄만 추가되고 `.thinking-ko.bak` 백업이 생기는지.
+   - (터미널) 옵션 `auto_thinking_summaries`를 끄고 `showThinkingSummaries` 없이 실행하면 입력창 위에 `[생각 요약 켜기]` 버튼이 뜨는지, 누르면 `settings.json`에 그 한 줄만 추가되고 `.thinking-ko.bak` 백업이 생기는지.
 5. 코드 블록·경로·명령어·URL·숫자가 들어간 답변을 받아서 그 부분이 그대로인지 확인.
 6. **ctrl+o**(상세 보기)로 원문이 그대로 남아 있는지, 다음 질문에서 Claude가 영어 원문 기준으로 대화를 이어 가는지 확인(대화 기록 무변경).
 7. 도구 호출이 섞인 작업(파일 읽기 등)을 시켜서 도구 사이의 글도 번역되는지, 화면이 깨지지 않는지 확인.
