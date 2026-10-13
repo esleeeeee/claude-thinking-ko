@@ -1,10 +1,12 @@
 // 엔진을 통한 통합 테스트: AssistantMessage 렌더 자리, 백그라운드 번역, invalidate로 다시 그리기,
-// 생성 중 원문 유지, 실패 시 원문, $.store 캐시, Gemini 옵션, 로그 최소화. 모델·HTTP는 모킹한다.
+// 생성 중 원문 유지, 실패 시 원문, $.store 캐시, Gemini 옵션, 로그 최소화, 생각 번역(띠·패널).
+// 모델·HTTP는 모킹한다.
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
 
-import { PENDING_ANSWER, PENDING_ANSWER_RETRY, shortHash } from '../hooks/core'
+import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
+import { OMITTED_HINT } from '../hooks/register'
 
 const PLUGIN = 'thinking-ko'
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -59,11 +61,15 @@ function world(on: On, opts: { reply?: Reply; store?: Record<string, unknown>; f
     const { status = 200, text } = opts.fetch ? opts.fetch(e.url) : { text: '{}' }
     return { value: { status, ok: status >= 200 && status < 300, headers: {}, text } }
   })
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.render', { component: 'AssistantMessage' }, ($, e): RenderElement => ({
     type: 'Text',
     props: {},
     children: [e.props.text],
   }) as RenderElement)
+  // 띠에 아무것도 없을 때 엔진이 그리는 것: 빈 Box
+  on('ui.render', { component: 'AbovePrompt' }, (): RenderElement => ({ type: 'Box', props: {}, children: [] }) as RenderElement)
   return w
 }
 
@@ -192,7 +198,7 @@ test('타임아웃: 응답이 늦으면 12초에 실패로 보고 재시도한�
   expect(await m.shown()).toBe('늦지 않은 번역 Slow one.')
 })
 
-test('여러 답변이 몰려도 동시에 나가는 번역 요청은 2개 이하이고 모두 번역된다', async ($, on) => {
+test('여러 답변이 몰려도 답변 번역 요청은 한 번에 1개씩(원본과 같음) 나가고 모두 번역된다', async ($, on) => {
   let inflight = 0
   let peak = 0
   const w = world(on, {
@@ -209,9 +215,9 @@ test('여러 답변이 몰려도 동시에 나가는 번역 요청은 2개 이�
   const ms = []
   for (let i = 1; i <= 4; i++) ms.push(await mountReply($, `msg-${i}`, `Answer ${i}.`))
   await w.clock.settle()
-  expect(inflight).toBe(2)
+  expect(inflight).toBe(1)
   await w.clock.advance(5000)
-  expect(peak).toBe(2)
+  expect(peak).toBe(1)
   for (let i = 1; i <= 4; i++) expect(await ms[i - 1]!.shown()).toBe(`번역 Answer ${i}.`)
 })
 
@@ -287,7 +293,7 @@ test(
     const log = w.writes.at(-1)
     expect(log?.path).toBe('/home/tester/.claude/thinking-ko/thinking-ko.log')
     expect(log?.text).toContain('start backend=gemini:gemini-flash-latest')
-    expect(log?.text).toContain('ok backend=gemini:gemini-flash-latest try=1')
+    expect(log?.text).toContain('ok backend=gemini:gemini-flash-latest kind=answer try=1')
     for (const secret of [KEY, 'Secret plan', '제미나이 번역']) expect(log?.text.includes(secret)).toBe(false)
   },
 )
@@ -317,3 +323,135 @@ test(
     expect(log.includes(KEY)).toBe(false)
   },
 )
+
+// ---- 생각(thinking) ----------------------------------------------------------------
+
+const BAND = {
+  plugin: PLUGIN,
+  surface: 'terminal' as const,
+  component: 'AbovePrompt' as const,
+  props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 80, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+}
+
+/** 그려진 글 전체(Text·Markdown)를 이어 붙인다. */
+async function textOf(ui: { findAll: (q: { type: string }) => Promise<Array<{ text: string }>> }): Promise<string> {
+  const texts = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Markdown' }))]
+  return texts.map(t => t.text).join('\n')
+}
+
+type StepChunk = { kind: 'thinking' | 'text'; index: number; text: string }
+
+/** 응답 스트림 하나를 흉내 낸다: chunks를 내보내고, 중간에 gate가 있으면 거기서 멈춘다. */
+function stepWith(on: On, parts: Array<StepChunk | Promise<void>>): void {
+  on('turn.step', async function* ($, e) {
+    for (const part of parts) {
+      if (part instanceof Promise) await part
+      else yield part
+    }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+}
+
+function readAll($: Engine, agentId?: string): Promise<void> {
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 1, ...(agentId ? { agentId } : {}) })
+  return (async () => {
+    for await (const _ of stream) {
+      // 조각은 그대로 지나간다
+    }
+  })()
+}
+
+test('생각: 스트림의 생각 블록을 읽어 번역하고 프롬프트 위 띠에 생각 중 → 옮기는 중 → 번역으로 보여 준다', async ($, on) => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const w = world(on, {
+    reply: async p => {
+      await w.clock.sleep(1000)
+      return answered(`**파일 확인**\n\n파일부터 읽어야겟어. (${sourceOf(p).length})`)
+    },
+  })
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: '**Checking the file**\n\nI should read' },
+    { kind: 'thinking', index: 0, text: ' the file first.' },
+    gate,
+    { kind: 'text', index: 1, text: 'Done.' },
+  ])
+  await start($)
+  await turn($)
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toBe('') // 아직 생각이 없으면 띠는 비어 있다
+  const reading = readAll($)
+  await w.clock.settle()
+  expect(await textOf(band)).toContain(STREAMING_THINKING)
+  expect(w.calls.length).toBe(0)
+  release()
+  await reading
+  await w.clock.settle()
+  expect(await textOf(band)).toContain(PENDING_THINKING)
+  expect(w.calls.length).toBe(1)
+  expect(w.calls[0]!.prompt).toBe('<원문>\n**Checking the file**\n\nI should read the file first.\n</원문>')
+  expect(w.calls[0]!.system).toContain('속으로 하는 생각(영어)을 한국어 혼잣말로')
+  await w.clock.advance(1000)
+  const shown = await textOf(band)
+  expect(shown).toContain('파일부터 읽어야겟어.')
+  expect(shown.includes('I should read')).toBe(false) // 원문 대신 번역
+  expect(w.appended()).toEqual([]) // 표시만 바꾼다
+
+  // /thinking-ko 패널에 최근 생각이 쌓인다
+  const ran = await $.command.run({ command: 'thinking-ko', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
+  expect(ran).toMatchObject({ text: '생각 번역 패널을 열었어.' })
+  const pane = await $.ui.mount({
+    plugin: PLUGIN,
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'thinking-ko',
+    props: { title: '생각 번역', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  })
+  expect(await textOf(pane)).toContain('파일부터 읽어야겟어.')
+})
+
+test('생각: 텍스트 없이 온 생각 블록(생각 요약 꺼짐)은 번역하지 않고 설정 방법을 띠에 알린다', async ($, on) => {
+  const w = world(on)
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: '' },
+    { kind: 'text', index: 1, text: 'Answer.' },
+  ])
+  await start($)
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toContain(OMITTED_HINT)
+  expect(w.calls.length).toBe(0)
+})
+
+test('생각: 서브에이전트의 생각은 띠에 올리지 않는다', async ($, on) => {
+  const w = world(on)
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: 'Subagent thinking here.' },
+    { kind: 'text', index: 1, text: 'Report.' },
+  ])
+  await start($)
+  await turn($)
+  await readAll($, 'agent-1')
+  await w.clock.settle()
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toBe('')
+  expect(w.calls.length).toBe(0)
+})
+
+test('생각: 번역이 끝내 실패하면 띠에 원문을 흐리게 보여 준다', async ($, on) => {
+  const w = world(on, { reply: () => ({ isAnswered: false, reason: 'empty-reply', usage: USAGE }) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Plain English thought.' }])
+  await start($)
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  await w.clock.advance(60_000)
+  const band = await $.ui.mount(BAND)
+  const shown = await textOf(band)
+  expect(shown).toContain('번역 실패, 원문')
+  expect(shown).toContain('Plain English thought.')
+})

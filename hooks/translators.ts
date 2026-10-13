@@ -4,6 +4,7 @@
 import type { HttpInit, HttpResponse, ModelCompleteOptions, ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 
 import { buildSystemPrompt, buildUserPrompt, maxTokensFor } from './core'
+import type { TranslationKind } from './core'
 
 export const DEFAULT_CLAUDE_MODEL = 'haiku'
 export const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest'
@@ -19,13 +20,14 @@ export async function claudeRequest(
   source: string,
   timeoutMs: number,
   signal: AbortSignal,
+  kind: TranslationKind = 'answer',
 ): Promise<string> {
   const maxTokens = maxTokensFor(source)
   const r = await complete(
     {
       model,
       // 예시가 든 시스템 프롬프트는 요청마다 같아서 캐시 표시를 한다(모델 최소 길이 미만이면 무시된다).
-      system: [{ text: buildSystemPrompt(), cache: true }],
+      system: [{ text: buildSystemPrompt(kind), cache: true }],
       prompt: buildUserPrompt(source),
       maxTokens,
       effort: 'low',
@@ -41,7 +43,12 @@ export async function claudeRequest(
 }
 
 /** Gemini generateContent 요청. 키는 URL이 아니라 헤더(x-goog-api-key)로 보낸다. */
-export function geminiRequestInit(model: string, apiKey: string, source: string): { url: string; init: HttpInit } {
+export function geminiRequestInit(
+  model: string,
+  apiKey: string,
+  source: string,
+  kind: TranslationKind = 'answer',
+): { url: string; init: HttpInit } {
   const name = model.replace(/^models\//, '')
   return {
     url: `${GEMINI_ENDPOINT}/${encodeURIComponent(name)}:generateContent`,
@@ -49,7 +56,7 @@ export function geminiRequestInit(model: string, apiKey: string, source: string)
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: buildSystemPrompt() }] },
+        systemInstruction: { parts: [{ text: buildSystemPrompt(kind) }] },
         contents: [{ role: 'user', parts: [{ text: buildUserPrompt(source) }] }],
         generationConfig: { maxOutputTokens: maxTokensFor(source) },
       }),
@@ -91,7 +98,13 @@ export function parseGeminiResponse(res: HttpResponse): string {
     .join('')
 }
 
-export async function geminiRequest(fetch: Fetch, model: string, apiKey: string, source: string): Promise<string> {
-  const { url, init } = geminiRequestInit(model, apiKey, source)
+export async function geminiRequest(
+  fetch: Fetch,
+  model: string,
+  apiKey: string,
+  source: string,
+  kind: TranslationKind = 'answer',
+): Promise<string> {
+  const { url, init } = geminiRequestInit(model, apiKey, source, kind)
   return parseGeminiResponse(await fetch(url, init))
 }

@@ -1,12 +1,18 @@
 {
   "name": "thinking-ko",
-  "version": "2.0.0",
-  "description": "Shows Claude's replies in casual Korean (display only; the transcript is unchanged). Claude Haiku by default, Gemini with your own key.",
-  "author": { "name": "esleeeeee" },
+  "version": "2.1.0",
+  "description": "Shows Claude's thinking (band above the prompt, /thinking-ko pane) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
+  "author": {
+    "name": "esleeeeee"
+  },
   "homepage": "https://github.com/esleeeeee/claude-thinking-ko",
   "repository": "https://github.com/esleeeeee/claude-thinking-ko",
   "license": "MIT",
-  "keywords": ["korean", "translation", "display"],
+  "keywords": [
+    "korean",
+    "translation",
+    "display"
+  ],
   "userConfig": {
     "gemini_api_key": {
       "type": "string",

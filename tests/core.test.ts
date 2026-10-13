@@ -4,9 +4,11 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   answerId,
+  buildSystemPrompt,
   cleanAnswer,
   clip,
   displayText,
+  headLines,
   maxTokensFor,
   MAX_OUTPUT_TOKENS,
   MAX_PENDING_BLOCKS,
@@ -17,6 +19,7 @@ import {
   shortHash,
   Slots,
   StreamTracker,
+  ThoughtCollector,
   TIMEOUT_MS,
   timeoutFor,
   TranslationManager,
@@ -487,5 +490,42 @@ describe('StreamTracker', () => {
     t.end(s)
     expect(t.active).toBe(0)
     expect(t.isGenerating('After')).toBe(false)
+  })
+})
+
+describe('ThoughtCollector', () => {
+  test('생각 블록은 다른 블록의 조각이 오거나 스트림이 끝나면 끝나고, 블록마다 원문을 모은다', () => {
+    const c = new ThoughtCollector()
+    const s = c.begin()
+    expect(c.thinking(s, 0, 'I should')).toEqual({ opened: true, closed: undefined })
+    expect(c.thinking(s, 0, ' read it.')).toEqual({ opened: false })
+    expect(c.other(s, 0)).toBe(undefined) // 같은 블록
+    expect(c.other(s, 1)).toEqual({ index: 0, text: 'I should read it.' }) // 도구·텍스트 블록 시작
+    expect(c.other(s, 2)).toBe(undefined) // 열린 생각 블록 없음
+    expect(c.thinking(s, 3, 'Next')).toEqual({ opened: true, closed: undefined })
+    expect(c.thinking(s, 4, 'Again')).toEqual({ opened: true, closed: { index: 3, text: 'Next' } })
+    expect(c.end(s)).toEqual({ index: 4, text: 'Again' })
+    expect(c.end(s)).toBe(undefined)
+  })
+})
+
+describe('프롬프트·표시', () => {
+  test('생각·답변 프롬프트: 말투 규칙은 같고, 답변만 코드·마크다운 보존 규칙과 코드 예시가 있다', () => {
+    const thinking = buildSystemPrompt('thinking')
+    const answer = buildSystemPrompt('answer')
+    for (const p of [thinking, answer]) {
+      expect(p).toContain('했어→햇어')
+      expect(p).toContain('<원문>')
+    }
+    expect(thinking).toContain('속으로 하는 생각(영어)을 한국어 혼잣말로')
+    expect(thinking).toContain('파일명·코드 식별자·명령어·URL·숫자는 원문 그대로')
+    expect(answer).toContain('마크다운 구조')
+    expect(answer).toContain('python util.py')
+    expect(thinking.includes('python util.py')).toBe(false)
+  })
+
+  test('headLines: 줄 수를 넘으면 앞부분만', () => {
+    expect(headLines('a\nb\nc', 5)).toEqual({ text: 'a\nb\nc', cut: false })
+    expect(headLines('a\nb\nc', 2)).toEqual({ text: 'a\nb', cut: true })
   })
 })

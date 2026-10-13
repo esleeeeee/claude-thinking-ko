@@ -8,7 +8,7 @@
     {
       "name": "thinking-ko",
       "source": "./",
-      "description": "Shows Claude's replies in casual Korean (display only). Claude Haiku by default, Gemini with your own key."
+      "description": "Shows Claude's thinking and replies in casual Korean (display only). Claude Haiku by default, Gemini with your own key."
     }
   ]
 }
