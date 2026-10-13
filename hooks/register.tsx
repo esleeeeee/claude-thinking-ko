@@ -75,6 +75,11 @@ const MAX_ROWS = 1000
 const PROMPT_KEY_CHARS = 2000
 export const PANE_ID = 'thinking-ko'
 export const COMMAND = 'thinking-ko'
+/**
+ * Where the fold toggle links off the terminal. The press is the module's to answer, so a surface
+ * opens nothing; one that opened it anyway would show this project's page.
+ */
+export const FOLD_HREF = 'https://github.com/esleeeeee/claude-thinking-ko#fold'
 /** Shown when thinking blocks arrive without their text (thinking summaries off). */
 export const OMITTED_HINT = '생각 요약이 꺼져 있어서 생각을 옮길 수 없어. 아래 버튼을 누르면 켜 줄게.'
 /** Shown once the setting was written: it takes effect on the next start. */
@@ -478,17 +483,38 @@ export const register: Register = (on, options) => {
     return pending.length > 0 ? thoughtsText(pending, maxLines, LIVE_FOLDED_LINES) : { text: '', cut: false }
   }
 
-  /** The live thoughts: a dim `✻ 생각` header with the fold button, then the latest lines. */
-  const liveBlock = (els: Els, shown: { text: string; cut: boolean }): RenderElement => {
+  /**
+   * The dim `✻ 생각` header, its fold toggle drawn as text beside it: on the terminal a Button
+   * without chrome; elsewhere a link the module answers, since a desktop draws every Button as a
+   * native one.
+   */
+  const thoughtsHeader = (els: Els, surface: RenderSurface, note = ''): RenderElement => {
     const { Box, Button, Markdown, Text } = els
+    if (surface === 'terminal') {
+      return (
+        <Box flexDirection="row">
+          <Text dimColor>✻ 생각{note} · </Text>
+          <Button key="fold" plain dimColor label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
+        </Box>
+      )
+    }
+    return (
+      <Markdown
+        key="fold"
+        dimColor
+        text={`✻ 생각${note} · [${collapsed ? '▸ 펼치기' : '▾ 접기'}](${FOLD_HREF})`}
+        pressableLinks={[FOLD_HREF]}
+        onLinkPress={toggleFold}
+      />
+    )
+  }
+
+  /** The live thoughts: the header with its fold toggle, then the latest lines. */
+  const liveBlock = (els: Els, surface: RenderSurface, shown: { text: string; cut: boolean }): RenderElement => {
+    const { Box, Markdown } = els
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          <Box flexGrow={1}>
-            <Text dimColor>✻ 생각{shown.cut && !collapsed ? ` · 앞부분은 /${COMMAND}` : ''}</Text>
-          </Box>
-          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
-        </Box>
+        {thoughtsHeader(els, surface, shown.cut && !collapsed ? ` · 앞부분은 /${COMMAND}` : '')}
         <Markdown text={shown.text} />
       </Box>
     )
@@ -846,15 +872,11 @@ export const register: Register = (on, options) => {
     const shown = above ? thoughtsText(above) : { text: '', cut: false }
     if (!shown.text) return reply
     // The reply's thoughts on top, then the engine's own drawing of the reply.
-    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Markdown } = els
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          <Box flexGrow={1}>
-            <Text dimColor>✻ 생각</Text>
-          </Box>
-          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
-        </Box>
+        {thoughtsHeader(els, e.surface)}
         <Markdown text={shown.text} dimColor />
         {await reply}
       </Box>
@@ -875,7 +897,7 @@ export const register: Register = (on, options) => {
     const { Box } = els
     return (
       <Box flexDirection="column">
-        {liveBlock(els, shown)}
+        {liveBlock(els, e.surface, shown)}
         {row}
       </Box>
     )
@@ -897,7 +919,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {row}
-        {liveBlock(els, shown)}
+        {liveBlock(els, e.surface, shown)}
       </Box>
     )
   })
@@ -917,7 +939,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {row}
-        {liveBlock(els, shown)}
+        {liveBlock(els, e.surface, shown)}
       </Box>
     )
   })
@@ -939,7 +961,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {row}
-        {liveBlock(els, shown)}
+        {liveBlock(els, e.surface, shown)}
       </Box>
     )
   })
@@ -956,7 +978,7 @@ export const register: Register = (on, options) => {
       const shown = liveShown(Math.max(3, Math.min(LIVE_MAX_LINES, e.props.maxRows - 2)))
       if (shown.text) {
         noteSite(`live-thinking site=AbovePrompt surface=${e.surface}`)
-        return liveBlock(els, shown)
+        return liveBlock(els, e.surface, shown)
       }
     }
     if (summariesWritten) {

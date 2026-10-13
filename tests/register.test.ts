@@ -6,7 +6,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
 
 import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
-import { AUTO_SUMMARIES_NOTE, FAILED_MARK, OMITTED_HINT, RESTART_HINT, SUMMARIES_ON_HINT } from '../hooks/register'
+import { AUTO_SUMMARIES_NOTE, FAILED_MARK, FOLD_HREF, OMITTED_HINT, RESTART_HINT, SUMMARIES_ON_HINT } from '../hooks/register'
 
 const PLUGIN = 'thinking-ko'
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -362,6 +362,23 @@ const BAND = {
   props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 80, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }
 
+/** 그려진 글을 문서 순서대로(Text의 글, Markdown의 text) 이어 붙인다. */
+async function textInOrder(ui: { drawn: () => Promise<RenderElement> }): Promise<string> {
+  const out: string[] = []
+  const walk = (n: unknown): void => {
+    if (typeof n === 'string') out.push(n)
+    if (typeof n !== 'object' || n === null) return
+    const el = n as { type?: string; props?: { text?: unknown }; children?: unknown[] }
+    if (el.type === 'Markdown' && typeof el.props?.text === 'string') out.push(el.props.text)
+    for (const c of el.children ?? []) walk(c)
+  }
+  walk(await ui.drawn())
+  return out.join('\n')
+}
+
+/** 데스크톱의 [접기] 글자(링크)를 누른다. */
+const FOLD_LINK = { key: 'fold', link: { href: FOLD_HREF } }
+
 /** 그려진 글 전체(Text·Markdown)를 이어 붙인다. */
 async function textOf(ui: { findAll: (q: { type: string }) => Promise<Array<{ text: string }>> }): Promise<string> {
   const texts = [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Markdown' }))]
@@ -580,6 +597,9 @@ test('생각: [접기]를 누르면 마지막 한 줄만, [펼치기]로 다시 
   await w.clock.settle()
   const m = await mountReply($, 'msg-1', 'Answer.')
   expect(await m.thoughts()).toBe('번역 First idea.\n\n번역 Second idea.\n\n번역 Third idea.')
+  const toggle = await m.ui.find({ key: 'fold' })
+  expect(toggle?.type).toBe('Button')
+  expect(toggle?.props).toMatchObject({ label: '접기', plain: true, dimColor: true }) // 테두리 없는 흐린 글자
   await m.ui.press({ key: 'fold' })
   expect(await m.thoughts()).toBe('번역 Third idea.')
   expect((await m.ui.find({ key: 'fold' }))?.props.label).toBe('펼치기')
@@ -684,8 +704,14 @@ test('생각 묶음은 데스크톱 화면 규칙으로도 그려진다(진행 �
   await w.clock.settle()
   const reply = await $.ui.mount({ plugin: PLUGIN, surface: 'desktop', component: 'AssistantMessage', requestId: 'msg-1', props: { text: 'Answer.', isFirstOfReply: true } })
   expect(await textOf(reply)).toContain('번역 Two.')
-  await reply.press({ key: 'fold' })
+  // 앱은 Button을 늘 네모 버튼으로 그리니, 접기는 머리 줄 안의 글자(링크)로 그린다
+  expect(await reply.findAll({ type: 'Button' })).toEqual([])
+  expect((await reply.find({ key: 'fold' }))?.props.text).toBe(`✻ 생각 · [▾ 접기](${FOLD_HREF})`)
+  await reply.press(FOLD_LINK)
   expect((await textOf(reply)).includes('번역 One.')).toBe(false)
+  expect((await reply.find({ key: 'fold' }))?.props.text).toBe(`✻ 생각 · [▸ 펼치기](${FOLD_HREF})`)
+  await reply.press(FOLD_LINK)
+  expect(await textOf(reply)).toContain('번역 One.')
   const spinner = await $.ui.mount({ ...SPINNER, surface: 'desktop' as const })
   expect(await textOf(spinner)).toContain('Working')
 })
@@ -857,16 +883,18 @@ test('데스크톱: 진행 줄은 그대로 두고, 생각하는 동안 대화�
   expect(live).toContain('prompt')
   expect(live).toContain('생각 First I will open the slides one by one.')
   expect(live).toContain(STREAMING_THINKING)
-  expect(live.indexOf('prompt')).toBeLessThan(live.indexOf('✻ 생각')) // 질문 줄이 위, 생각이 아래
+  const ordered = await textInOrder(prompt)
+  expect(ordered.indexOf('prompt')).toBeLessThan(ordered.indexOf('✻ 생각')) // 질문 줄이 위, 생각이 아래
+  expect(await prompt.findAll({ type: 'Button' })).toEqual([])
   expect(await textOf(older)).toBe('prompt') // 같은 글의 예전 질문 줄에는 안 붙는다
   expect(await textOf(deskSpinner)).toBe('Working') // 한 줄짜리 진행 줄은 엔진 것 그대로
   expect(await textOf(deskBand)).toBe('') // 입력창 위 자리도 비어 있다
   expect(await textOf(termPrompt)).toBe('prompt') // 터미널은 진행 줄 위에 그리니 질문 줄은 그대로
-  await prompt.press({ key: 'fold' }) // 여기서도 접고 펼 수 있다
+  await prompt.press(FOLD_LINK) // 여기서도 접고 펼 수 있다
   await w.clock.settle()
   expect(w.store.get('band-collapsed')).toBe(true)
   expect(await textOf(prompt)).toContain('생각 First I will open the slides one by one.') // 접혀도 마지막 세 줄
-  await prompt.press({ key: 'fold' })
+  await prompt.press(FOLD_LINK)
   await w.clock.settle()
   expect(w.store.get('band-collapsed')).toBe(false)
 
