@@ -780,43 +780,57 @@ export function quoteBlock(text: string, head: string): string {
   return [`> ${head}${lines[0] ?? ''}`, ...lines.slice(1).map(l => (l ? `> ${l}` : '>'))].join('\n')
 }
 
-/** 문단 경계 없이 이만큼 길어진 생각은 마지막 문장 끝에서 끊어 먼저 옮긴다. */
-export const MAX_PARAGRAPH_CHARS = 600
+/** 문단이 아직 안 끝났어도, 끝난 문장들이 이만큼 쌓이면 먼저 옮긴다(생각하는 도중에 보이게). */
+export const MIN_SENTENCES_CHARS = 40
+
+/** 생각 글 한 조각과, 다음 조각과의 사이(문단 사이 `\n\n`, 문단 안 줄바꿈 `\n`, 문장 사이 공백 `' '`). */
+export type ThoughtPart = { text: string; sep: '\n\n' | '\n' | ' ' }
+
+/** 문장 끝으로 보지 않을 줄임말(e.g. 같은 것). */
+const NOT_SENTENCE_END = /\b(?:e\.g|i\.e|etc|vs|cf|approx|Mr|Ms|Dr|St)\.$/i
 
 /**
- * 스트리밍 중인 생각 글에서 `from` 이후로 끝난 문단들을 떼어 낸다(빈 줄이 경계). 코드 펜스 안의
- * 빈 줄에서는 끊지 않고, 문단이 MAX_PARAGRAPH_CHARS를 넘으면 마지막 문장 끝에서 끊는다.
+ * 스트리밍 중인 생각 글에서 `from` 이후로 끝난 부분을 떼어 낸다.
+ * - 빈 줄로 끝난 문단(코드 펜스 안의 빈 줄은 제외)
+ * - 문단이 아직 이어지는 중이어도, 뒤에 글이 이어진 문장 끝까지(끝난 문장들이 MIN_SENTENCES_CHARS 이상일 때).
+ *   코드 펜스가 열려 있으면 문장 단위로는 끊지 않는다.
  * `final`이면 남은 글도 모두 내보낸다. 다음에 읽기 시작할 위치를 `next`로 돌려준다.
  */
-export function takeParagraphs(text: string, from: number, final: boolean): { parts: string[]; next: number } {
-  const parts: string[] = []
+export function takeThoughtParts(text: string, from: number, final: boolean): { parts: ThoughtPart[]; next: number } {
+  const parts: ThoughtPart[] = []
   let at = from
-  const push = (p: string): void => {
-    const t = trimBlankLines(p)
-    if (t.trim()) parts.push(t)
+  const push = (p: string, sep: ThoughtPart['sep']): void => {
+    const t = trimBlankLines(p).trim()
+    if (t) parts.push({ text: t, sep })
   }
   for (;;) {
     const rest = text.slice(at)
+    let cut: { end: number; next: number; sep: ThoughtPart['sep'] } | undefined
     const boundary = /\n[ \t]*\n/g
-    let cut: { end: number; next: number } | undefined
     for (let m = boundary.exec(rest); m; m = boundary.exec(rest)) {
       const fences = (rest.slice(0, m.index).match(/^[ \t]*(```|~~~)/gm) ?? []).length
       if (fences % 2 === 0) {
-        cut = { end: m.index, next: m.index + m[0].length }
+        cut = { end: m.index, next: m.index + m[0].length, sep: '\n\n' }
         break
       }
     }
-    if (!cut && rest.length > MAX_PARAGRAPH_CHARS && !/^[ \t]*(```|~~~)/m.test(rest)) {
-      const head = rest.slice(0, MAX_PARAGRAPH_CHARS)
-      const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('? '), head.lastIndexOf('! '))
-      if (end > 100) cut = { end: end + 1, next: end + 2 }
+    if (!cut && !/^[ \t]*(```|~~~)/m.test(rest)) {
+      // 마지막으로 끝난 문장: 마침표·물음표·느낌표(닫는 따옴표·괄호 포함) 뒤에 공백과 다음 글이 왔을 때.
+      const sentence = /[.!?]["'”’)\]]*(\s+)(?=\S)/g
+      let last: { end: number; next: number; sep: ThoughtPart['sep'] } | undefined
+      for (let m = sentence.exec(rest); m; m = sentence.exec(rest)) {
+        const end = m.index + m[0].length - m[1]!.length
+        if (NOT_SENTENCE_END.test(rest.slice(0, end))) continue
+        last = { end, next: m.index + m[0].length, sep: m[1]!.includes('\n') ? '\n' : ' ' }
+      }
+      if (last && rest.slice(0, last.end).trim().length >= MIN_SENTENCES_CHARS) cut = last
     }
     if (!cut) break
-    push(rest.slice(0, cut.end))
+    push(rest.slice(0, cut.end), cut.sep)
     at += cut.next
   }
   if (final) {
-    push(text.slice(at))
+    push(text.slice(at), '\n\n')
     at = text.length
   }
   return { parts, next: at }

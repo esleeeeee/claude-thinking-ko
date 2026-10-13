@@ -390,51 +390,73 @@ const SPINNER = {
   props: { word: 'Working', message: null, suffix: '…', mode: 'thinking' as const },
 }
 
-test('생각: 문단마다 바로 번역해서, 생각 도중에 대화창의 진행 줄 위에 한국어로 쌓이고, 답변 글이 나오면 그 위로 옮겨 간다', async ($, on) => {
+/** 응답 스트림을 읽으며 지나간 조각을 모은다(끝나기를 기다리지 않는다). */
+function readInto($: Engine, got: StepChunk[], index = 0): Promise<void> {
+  const stream = $.turn.step({ turnId: 't1', index, model: 'claude-opus-5-5', messageCount: 1 })
+  return (async () => {
+    for await (const c of stream) got.push(c as StepChunk)
+  })()
+}
+
+const textsOf = (got: StepChunk[]): string[] => got.flatMap(c => (c.kind === 'text' ? [c.text] : []))
+
+test('생각: 생각 도중에 끝난 문장부터 바로 번역해 진행 줄 위에 쌓고, 생각이 끝나면 그 번역이 나올 때까지 답변이 기다렸다 나온다', async ($, on) => {
   let release!: () => void
   const gate = new Promise<void>(resolve => {
     release = resolve
   })
+  const KO: Record<string, string> = {
+    'I need to check the cron job before anything else.': '크론 잡부터 확인해야겠어.',
+    'It must fire after the benchmark ends.': '벤치마크 끝난 다음에 돌아야 해.',
+  }
   const w = world(on, {
     reply: async (p, system) => {
       await w.clock.sleep(1000)
-      if (!isThinking(system)) return answered('다 됐어.')
-      return answered(sourceOf(p).startsWith('**Checking') ? '**파일 확인**' : sourceOf(p).startsWith('I should') ? '파일부터 읽어야겠어.' : '그다음 테스트 돌려 볼게.')
+      return answered(isThinking(system) ? (KO[sourceOf(p)] ?? '?') : '다 됐어.')
     },
   })
   stepWith(on, [
-    { kind: 'thinking', index: 0, text: '**Checking the file**\n\nI should read' },
-    { kind: 'thinking', index: 0, text: ' the file first.\n\nThen I will run' },
+    { kind: 'thinking', index: 0, text: 'I need to check the cron job before anything else. It must fire after the' },
     gate, // 생각이 아직 이어지는 중
-    { kind: 'thinking', index: 0, text: ' the tests.' },
+    { kind: 'thinking', index: 0, text: ' benchmark ends.' },
     { kind: 'text', index: 1, text: 'Done.' },
   ])
   await start($)
   await turn($)
   const spinner = await $.ui.mount(SPINNER)
   expect(await textOf(spinner)).toBe('Working') // 생각이 없으면 엔진 진행 줄 그대로
-  const reading = readAll($)
+  const got: StepChunk[] = []
+  const reading = readInto($, got)
   await w.clock.settle()
-  // 끝난 문단(제목 + 첫 문단)은 생각이 끝나기 전에 이미 번역 요청이 나갔다
-  expect(w.calls.map(c => sourceOf(c.prompt))).toEqual(['**Checking the file**', 'I should read the file first.'])
+  // 문단은 안 끝났지만 끝난 문장은 생각 도중에 이미 번역 요청이 나갔다
+  expect(w.calls.map(c => sourceOf(c.prompt))).toEqual(['I need to check the cron job before anything else.'])
   expect(await textOf(spinner)).toContain(PENDING_THINKING)
   await w.clock.advance(1000)
   const mid = await textOf(spinner)
-  expect(mid).toContain('파일부터 읽어야겠어.') // 생각 도중에 한국어가 보인다
+  expect(mid).toContain('크론 잡부터 확인해야겠어.') // 생각하는 도중에 한국어가 보인다
   expect(mid).toContain(STREAMING_THINKING) // 나머지는 아직 생각 중
   expect(mid).toContain('Working') // 엔진 진행 줄은 그대로 아래에 있다
-  expect(mid.includes('I should read')).toBe(false)
-  release()
-  await reading
+  expect(mid.includes('I need to')).toBe(false)
+
+  release() // 생각이 끝나고 답변 글이 온다
   await w.clock.settle()
-  // 답변 글이 시작됐으니 생각은 진행 줄에서 빠지고 그 답변 위로 간다
+  expect(textsOf(got)).toEqual([]) // 답변 글은 아직 안 나갔다: 마지막 문장 번역을 기다리는 중
+  expect(await textOf(spinner)).toContain(PENDING_THINKING)
+  await w.clock.advance(1000) // 마지막 문장 번역 도착
+  expect(textsOf(got)).toEqual(['Done.']) // 그제야 답변 글이 나간다(글자는 그대로)
+  await reading
+  expect(got.flatMap(c => (c.kind === 'thinking' ? [c.text] : [])).join('')).toBe('I need to check the cron job before anything else. It must fire after the benchmark ends.')
+
+  // 답변 글이 나오면 생각은 진행 줄에서 빠지고 그 답변 위로 간다(번역이 끝난 채로)
   expect(await textOf(spinner)).toBe('Working')
   const m = await mountReply($, 'msg-1', 'Done.')
-  await w.clock.advance(2000)
-  expect(await m.thoughts()).toBe('**파일 확인**\n\n파일부터 읽어야겠어.\n\n그다음 테스트 돌려 볼게.')
+  expect(await m.thoughts()).toBe('크론 잡부터 확인해야겠어. 벤치마크 끝난 다음에 돌아야 해.')
+  await w.clock.advance(1000)
   expect(await m.shown()).toBe('다 됐어.')
-  expect(w.store.get('k:msg-1')).toEqual({ h: shortHash('Done.'), kos: ['**파일 확인**\n\n파일부터 읽어야겠어.\n\n그다음 테스트 돌려 볼게.'] })
+  expect(w.store.get('k:msg-1')).toEqual({ h: shortHash('Done.'), kos: ['크론 잡부터 확인해야겠어. 벤치마크 끝난 다음에 돌아야 해.'] })
   expect(w.appended()).toEqual([]) // 표시만 바꾼다
+  await w.clock.advance(2000)
+  expect(w.writes.at(-1)?.text).toMatch(/hold ms=\d+ settled=true/)
 
   // /thinking-ko 패널에 최근 생각이 쌓인다
   const ran = await $.command.run({ command: 'thinking-ko', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
@@ -446,7 +468,51 @@ test('생각: 문단마다 바로 번역해서, 생각 도중에 대화창의 �
     requestId: 'thinking-ko',
     props: { title: '생각 번역', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
   })
-  expect(await textOf(pane)).toContain('파일부터 읽어야겠어.')
+  expect(await textOf(pane)).toContain('크론 잡부터 확인해야겠어.')
+})
+
+test('생각: 번역이 3초 넘게 걸리면 답변은 3초만 기다리고 나간다', async ($, on) => {
+  const w = world(on, {
+    reply: async (p, system) => {
+      await w.clock.sleep(isThinking(system) ? 10_000 : 0)
+      return answered(isThinking(system) ? '늦은 생각.' : '답.')
+    },
+  })
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: 'A slow thought.' },
+    { kind: 'text', index: 1, text: 'Answer.' },
+  ])
+  await start($)
+  await turn($)
+  const got: StepChunk[] = []
+  const reading = readInto($, got)
+  await w.clock.advance(2999)
+  expect(textsOf(got)).toEqual([])
+  await w.clock.advance(1)
+  expect(textsOf(got)).toEqual(['Answer.'])
+  await reading
+  const m = await mountReply($, 'msg-1', 'Answer.')
+  expect(await m.thoughts()).toBe(`_${PENDING_THINKING}_`) // 답변 위에서 번역을 마저 기다린다
+  await w.clock.advance(10_000)
+  expect(await m.thoughts()).toBe('늦은 생각.')
+})
+
+test('생각: thinking_first를 끄면 답변이 기다리지 않는다', { options: { thinking_first: false } }, async ($, on) => {
+  const w = world(on, {
+    reply: async () => {
+      await w.clock.sleep(1000)
+      return answered('생각.')
+    },
+  })
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: 'A thought.' },
+    { kind: 'text', index: 1, text: 'Answer.' },
+  ])
+  await start($)
+  await turn($)
+  const got: StepChunk[] = []
+  await readInto($, got)
+  expect(textsOf(got)).toEqual(['Answer.']) // 시계를 안 돌려도 다 지나갔다
 })
 
 test('생각: 도구 호출 앞의 생각은 같은 턴의 다음 답변 위에 붙는다', async ($, on) => {
@@ -514,17 +580,19 @@ test('생각: [접기]를 누르면 마지막 한 줄만, [펼치기]로 다시 
   expect(await m.thoughts()).toBe('번역 First idea.\n\n번역 Second idea.\n\n번역 Third idea.')
 })
 
-test('생각: 접은 상태는 다음 세션에도 이어진다', async ($, on) => {
+test('생각: 접은 상태는 다음 세션에도 이어진다(진행 줄 위는 접혀도 마지막 세 줄)', async ($, on) => {
   const w = world(on, { store: { 'band-collapsed': true }, reply: p => answered(`번역 ${sourceOf(p)}`) })
-  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Alpha.\n\nBeta.' }])
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Alpha.\n\nBeta.\n\nGamma.\n\nDelta.\n\nEpsilon.' }])
   await start($)
   await turn($)
   await readAll($)
   await w.clock.settle()
   const spinner = await $.ui.mount(SPINNER)
   const shown = await textOf(spinner)
-  expect(shown).toContain('번역 Beta.')
-  expect(shown.includes('Alpha')).toBe(false)
+  expect(shown).toContain('번역 Gamma.')
+  expect(shown).toContain('번역 Epsilon.')
+  expect(shown.includes('Beta')).toBe(false)
+  expect((await spinner.find({ key: 'fold' }))?.props.label).toBe('펼치기')
 })
 
 test('생각: thinking_in_reply를 끄면 답변 위에 붙이지 않는다', { options: { thinking_in_reply: false } }, async ($, on) => {

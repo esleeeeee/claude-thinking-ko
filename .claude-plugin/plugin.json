@@ -1,6 +1,6 @@
 {
   "name": "thinking-ko",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Shows Claude's thinking (live in the transcript, then above the reply it led to) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
   "author": {
     "name": "esleeeeee"
@@ -39,6 +39,13 @@
       "type": "boolean",
       "title": "Thinking above replies",
       "description": "Draw the translated thinking at the top of the reply that follows it (on by default). Off: thinking shows only live above the progress row and in /thinking-ko.",
+      "default": true,
+      "required": false
+    },
+    "thinking_first": {
+      "type": "boolean",
+      "title": "Thinking before reply",
+      "description": "When a thinking block ends, let what follows wait up to 3 seconds for that thought's translation, so the Korean thought shows before the reply. Off: no waiting; the thought may appear just after the reply starts.",
       "default": true,
       "required": false
     }

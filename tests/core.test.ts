@@ -22,7 +22,7 @@ import {
   Slots,
   StreamTracker,
   tailLines,
-  takeParagraphs,
+  takeThoughtParts,
   ThoughtCollector,
   TIMEOUT_MS,
   timeoutFor,
@@ -535,25 +535,41 @@ describe('프롬프트·표시', () => {
   })
 })
 
-describe('생각 문단 나누기', () => {
-  test('takeParagraphs: 빈 줄로 끝난 문단만 떼고, final이면 나머지까지', () => {
-    expect(takeParagraphs('One.\n\nTwo is still', 0, false)).toEqual({ parts: ['One.'], next: 6 })
-    expect(takeParagraphs('One.\n\nTwo is done.', 6, true)).toEqual({ parts: ['Two is done.'], next: 18 })
-    expect(takeParagraphs('No break yet', 0, false)).toEqual({ parts: [], next: 0 })
+describe('생각 나누기(문단·문장)', () => {
+  test('빈 줄로 끝난 문단을 떼고, final이면 나머지까지', () => {
+    expect(takeThoughtParts('First paragraph here.\n\nSecond is still', 0, false)).toEqual({
+      parts: [{ text: 'First paragraph here.', sep: '\n\n' }],
+      next: 23,
+    })
+    expect(takeThoughtParts('First paragraph here.\n\nSecond is done', 23, true)).toEqual({
+      parts: [{ text: 'Second is done', sep: '\n\n' }],
+      next: 37,
+    })
+    expect(takeThoughtParts('No break yet', 0, false)).toEqual({ parts: [], next: 0 })
   })
 
-  test('takeParagraphs: 코드 펜스 안의 빈 줄에서는 끊지 않는다', () => {
+  test('문단이 이어지는 중이어도, 다음 문장이 시작된 끝난 문장들은 바로 뗀다(40자 이상)', () => {
+    const text = 'I need to pre-build S0009 candidates before 23:40. The cron needs idle time. I am sketch'
+    const { parts, next } = takeThoughtParts(text, 0, false)
+    expect(parts).toEqual([{ text: 'I need to pre-build S0009 candidates before 23:40. The cron needs idle time.', sep: ' ' }])
+    expect(text.slice(next)).toBe('I am sketch')
+    // 끝난 문장이 짧으면 기다린다
+    expect(takeThoughtParts('Short one. And mo', 0, false).parts).toEqual([])
+    // 다음 글이 아직 안 왔으면(마침표로 끝난 채) 문장이 끝났는지 모르니 기다린다
+    expect(takeThoughtParts('This sentence ends here with a full stop.', 0, false).parts).toEqual([])
+  })
+
+  test('e.g. 같은 줄임말과 소수점에서는 끊지 않는다', () => {
+    const text = 'Use a cache, e.g. a map keyed by id, to avoid 1.5 s waits on every call. Then mo'
+    expect(takeThoughtParts(text, 0, false).parts).toEqual([
+      { text: 'Use a cache, e.g. a map keyed by id, to avoid 1.5 s waits on every call.', sep: ' ' },
+    ])
+  })
+
+  test('코드 펜스 안의 빈 줄에서는 끊지 않고, 펜스가 열려 있으면 문장으로도 안 끊는다', () => {
     const text = 'Look:\n\n```ts\nconst a = 1\n\nconst b = 2\n```\n\nAfter.'
-    const { parts } = takeParagraphs(text, 0, true)
-    expect(parts).toEqual(['Look:', '```ts\nconst a = 1\n\nconst b = 2\n```', 'After.'])
-  })
-
-  test('takeParagraphs: 빈 줄 없이 너무 길면 마지막 문장 끝에서 끊는다', () => {
-    const long = 'This sentence is about twenty words long and keeps going on. '.repeat(12)
-    const { parts, next } = takeParagraphs(long, 0, false)
-    expect(parts.length).toBe(1)
-    expect(parts[0]!.endsWith('.')).toBe(true)
-    expect(next > 100 && next <= 600).toBe(true)
+    expect(takeThoughtParts(text, 0, true).parts.map(p => p.text)).toEqual(['Look:', '```ts\nconst a = 1\n\nconst b = 2\n```', 'After.'])
+    expect(takeThoughtParts('Before the code we look at it. ```ts\nx. y', 0, false).parts).toEqual([])
   })
 
   test('tailLines: 마지막 줄들만', () => {

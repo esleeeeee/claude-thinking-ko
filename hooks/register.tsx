@@ -11,11 +11,14 @@
 //
 // Thinking: there is no render site for thinking blocks, so the original thinking row stays as
 // it is. The thinking text is read from the response stream (`turn.step` thinking chunks) while
-// it streams, and each paragraph is translated as soon as it is complete. In the transcript, the
+// it streams; each finished sentence or paragraph is translated right away. In the transcript, the
 // turn's thoughts not yet followed by reply text are drawn above the engine's own progress row
 // (`Spinner`, wrapped, not replaced) as they come in; once reply text follows them, they are
-// drawn at the top of that reply block instead (`thinking_in_reply`, on by default). A fold
-// button keeps only the latest line. The `/thinking-ko` pane lists recent thoughts. Claude Code
+// drawn at the top of that reply block instead (`thinking_in_reply`, on by default). When a
+// thinking block ends, what follows it in the stream waits a moment (at most HOLD_MS, inside the
+// hook's budget) for that thought's last part to be translated, so the Korean thought shows before
+// the reply (`thinking_first`, on by default); chunks are never changed. A fold button keeps only
+// the latest lines. The `/thinking-ko` pane lists recent thoughts. Claude Code
 // only receives thinking text when thinking summaries are on (the desktop app does by default;
 // the terminal needs `"showThinkingSummaries": true`); when a thinking block arrives empty, the
 // band above the prompt says so and offers to turn them on.
@@ -34,13 +37,13 @@ import {
   StreamTracker,
   STREAMING_THINKING,
   tailLines,
-  takeParagraphs,
+  takeThoughtParts,
   ThoughtCollector,
   timeoutFor,
   TranslationManager,
   trimBlankLines,
 } from './core'
-import type { Timers, TranslationKind } from './core'
+import type { ThoughtPart, Timers, TranslationKind } from './core'
 import { claudeRequest, DEFAULT_CLAUDE_MODEL, DEFAULT_GEMINI_MODEL, geminiRequest } from './translators'
 import type { Complete } from './translators'
 
@@ -52,6 +55,12 @@ export const MAX_CACHED_CHARS = 8000
 export const MAX_THOUGHTS = 20
 /** Lines of live thinking drawn above the progress row at most (the latest ones). */
 export const LIVE_MAX_LINES = 20
+/** The same, while folded. */
+export const LIVE_FOLDED_LINES = 3
+/** How long what follows a thinking block may wait for that thought's translation. */
+export const HOLD_MS = 3000
+/** Budget a hold always leaves the turn.step hook (HookBudget: 10 s of its own time per response). */
+const HOLD_BUDGET_MARGIN_MS = 4000
 /** Thinking paragraphs that may wait for translation before the oldest is shown untranslated. */
 const THINKING_MAX_PENDING = 24
 /** Reply blocks remembered with the thoughts that came before them. */
@@ -104,8 +113,8 @@ type Io = {
   write: (path: string, text: string) => Promise<void>
 }
 
-/** One paragraph of a thought, translated on its own. */
-type Segment = { id: string; source: string }
+/** One part of a thought (finished sentences or a paragraph), translated on its own. */
+type Segment = { id: string; source: string; sep: ThoughtPart['sep'] }
 
 /**
  * One thinking block of the main conversation: its text so far (`buffer`), how much of it was
@@ -137,6 +146,7 @@ export const register: Register = (on, options) => {
   const geminiModel = optionText(options.gemini_model) || DEFAULT_GEMINI_MODEL
   const claudeModel = optionText(options.claude_model) || DEFAULT_CLAUDE_MODEL
   const thinkingInReply = options.thinking_in_reply !== false
+  const thinkingFirst = options.thinking_first !== false
   const backend = geminiKey ? `gemini:${geminiModel}` : `claude:${claudeModel}`
 
   /** The engine calls background work makes (see Io). */
@@ -213,12 +223,24 @@ export const register: Register = (on, options) => {
   }
 
   // ---- redraw ----
+  /** Checks run on every change (a hold waiting for a thought to be translated). */
+  const waiters = new Set<() => void>()
+
   const redraw = (): void => {
     try {
       io?.invalidate()
     } catch {
       // nothing drawn yet
     }
+    for (const check of [...waiters]) check()
+  }
+
+  /** Render sites already noted in the log (component and surface), for diagnosis. */
+  const sitesLogged = new Set<string>()
+  const noteSite = (what: string): void => {
+    if (sitesLogged.has(what)) return
+    sitesLogged.add(what)
+    log(`render ${what}`)
   }
 
   // ---- cache ($.store, by message id) ----
@@ -292,14 +314,14 @@ export const register: Register = (on, options) => {
 
   // ---- thinking ----
 
-  /** Hands the thought's finished paragraphs (all of it when `final`) to translation. */
+  /** Hands the thought's finished sentences and paragraphs (all of it when `final`) to translation. */
   const feed = (t: Thought, final: boolean): boolean => {
-    const { parts, next } = takeParagraphs(t.buffer, t.consumed, final)
+    const { parts, next } = takeThoughtParts(t.buffer, t.consumed, final)
     t.consumed = next
-    for (const source of parts) {
-      const seg: Segment = { id: answerId(`${t.key}:${t.segments.length}`, source), source }
+    for (const part of parts) {
+      const seg: Segment = { id: answerId(`${t.key}:${t.segments.length}`, part.text), source: part.text, sep: part.sep }
       t.segments.push(seg)
-      thinker.enqueue(seg.id, source)
+      thinker.enqueue(seg.id, part.text)
     }
     return parts.length > 0
   }
@@ -322,19 +344,21 @@ export const register: Register = (on, options) => {
   /** The thought as markdown: translated paragraphs, the untranslated ones marked, and what is still coming. */
   const markdownOf = (t: InlineThought): string => {
     if ('ko' in t) return t.ko
-    const parts: string[] = []
-    const mark = (status: string): void => {
-      const line = `_${status}_`
-      if (parts.at(-1) !== line) parts.push(line)
+    // Each part keeps what separated it from the next in the original: a paragraph break, a line
+    // break or a space (finished sentences of a paragraph still being written).
+    const pieces: Array<{ text: string; sep: string; isMark: boolean }> = []
+    const mark = (status: string, sep: string): void => {
+      if (pieces.at(-1)?.isMark) return
+      pieces.push({ text: `_${status}_`, sep, isMark: true })
     }
     for (const seg of t.segments) {
       const st = thinker.get(seg.id)
-      if (st?.status === 'done') parts.push(st.ko)
-      else if (st?.status === 'pending') mark(st.retry ? PENDING_THINKING_RETRY : PENDING_THINKING)
-      else parts.push(`_${FAILED_MARK}_ ${seg.source}`)
+      if (st?.status === 'done') pieces.push({ text: st.ko, sep: seg.sep, isMark: false })
+      else if (st?.status === 'pending') mark(st.retry ? PENDING_THINKING_RETRY : PENDING_THINKING, seg.sep)
+      else pieces.push({ text: `_${FAILED_MARK}_ ${seg.source}`, sep: seg.sep, isMark: false })
     }
-    if (t.live) mark(STREAMING_THINKING)
-    return parts.join('\n\n')
+    if (t.live) mark(STREAMING_THINKING, '')
+    return pieces.map((p, i) => (i < pieces.length - 1 ? p.text + p.sep : p.text)).join('')
   }
 
   /** Whether every paragraph of the thought is settled (translated or failed). */
@@ -345,17 +369,60 @@ export const register: Register = (on, options) => {
    * The thoughts as markdown to draw: all of them, the latest `maxLines` lines at most; folded,
    * only the latest line. '' when there is none to show.
    */
-  const thoughtsText = (list: readonly InlineThought[], maxLines = Number.POSITIVE_INFINITY): { text: string; cut: boolean } => {
+  const thoughtsText = (
+    list: readonly InlineThought[],
+    maxLines = Number.POSITIVE_INFINITY,
+    foldedLines = 1,
+  ): { text: string; cut: boolean } => {
     const markdown = list
       .filter(t => !('gone' in t && t.gone))
       .map(t => markdownOf(t) || `_${STREAMING_THINKING}_`)
       .join('\n\n')
     if (!markdown) return { text: '', cut: false }
     if (collapsed) {
-      const latest = markdown.split('\n').filter(l => l.trim()).at(-1) ?? ''
-      return { text: latest, cut: true }
+      const lines = markdown.split('\n').filter(l => l.trim())
+      return { text: lines.slice(-foldedLines).join('\n\n'), cut: lines.length > foldedLines }
     }
     return Number.isFinite(maxLines) ? tailLines(markdown, maxLines) : { text: markdown, cut: false }
+  }
+
+  /**
+   * Waits until every part of the thought is translated (or failed), `ms` at most, or until the
+   * signal aborts (the turn was interrupted).
+   */
+  const settledOrTimeout = (t: Thought, ms: number, signal: AbortSignal): Promise<void> =>
+    new Promise(resolve => {
+      let cancel: (() => void) | undefined
+      const done = (): void => {
+        waiters.delete(check)
+        cancel?.()
+        signal.removeEventListener('abort', done)
+        resolve()
+      }
+      const check = (): void => {
+        if (settled(t)) done()
+      }
+      if (settled(t) || !io || signal.aborted) {
+        resolve()
+        return
+      }
+      waiters.add(check)
+      signal.addEventListener('abort', done, { once: true })
+      try {
+        cancel = io.after(ms, done)
+      } catch {
+        done()
+      }
+    })
+
+  /** Lets the thought that just ended show in Korean before what follows it (thinking_first). */
+  const holdFor = async (t: Thought, next: { signal: AbortSignal; budget: { remainingMs: number } }): Promise<void> => {
+    if (!thinkingFirst || t.gone || settled(t)) return
+    const ms = Math.min(HOLD_MS, next.budget.remainingMs - HOLD_BUDGET_MARGIN_MS)
+    if (!(ms > 0)) return
+    const started = Date.now()
+    await settledOrTimeout(t, ms, next.signal)
+    log(`hold ms=${Date.now() - started} settled=${settled(t)}`)
   }
 
   const toggleFold = (): void => {
@@ -502,7 +569,8 @@ export const register: Register = (on, options) => {
   })
 
   // Reads the response as it streams: which text block is still being written, and the thinking
-  // of the main conversation, paragraph by paragraph. Every chunk is passed on unchanged.
+  // of the main conversation, sentence by sentence. Every chunk is passed on unchanged; after a
+  // thinking block, the next chunk may wait briefly for its translation (holdFor).
   on('turn.step', async function* ($, e, next) {
     const step = tracker.begin()
     const thinking = e.agentId === undefined ? collector.begin() : undefined
@@ -522,6 +590,17 @@ export const register: Register = (on, options) => {
     try {
       for await (const chunk of stream) {
         let changed = false
+        // A thinking block of the main conversation ends where another block begins: send its last
+        // part for translation and give it a moment, so the Korean thought shows first.
+        if (thinking !== undefined && chunk.kind !== 'thinking' && 'index' in chunk && typeof chunk.index === 'number') {
+          const closed = collector.other(thinking, chunk.index)
+          const t = closed && live.get(closed.index)
+          if (t) {
+            thoughtEnded(t)
+            redraw()
+            await holdFor(t, next)
+          }
+        }
         if (chunk.kind === 'text') changed = tracker.text(step, chunk.index, chunk.text)
         else if ('index' in chunk && typeof chunk.index === 'number') changed = tracker.other(step, chunk.index)
         if (thinking !== undefined && 'index' in chunk && typeof chunk.index === 'number') {
@@ -595,6 +674,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    noteSite(`site=AssistantMessage surface=${e.surface}${e.props.isSummary ? ' summary' : ''}`)
     const source = trimBlankLines(e.props.text)
     if (!source.trim()) return next(e)
     const id = answerId(e.requestId, source)
@@ -637,10 +717,12 @@ export const register: Register = (on, options) => {
   // The engine's progress row while a turn runs, with the turn's thoughts that no reply text has
   // followed yet drawn above it in Korean as they come in.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    noteSite(`site=Spinner surface=${e.surface}`)
     const pending = (currentTurn === undefined ? [] : (unplaced.get(currentTurn) ?? [])).filter(t => !t.gone)
     if (pending.length === 0) return next(e)
-    const shown = thoughtsText(pending, LIVE_MAX_LINES)
+    const shown = thoughtsText(pending, LIVE_MAX_LINES, LIVE_FOLDED_LINES)
     if (!shown.text) return next(e)
+    noteSite(`live-thinking site=Spinner surface=${e.surface}`)
     const row = await next(e)
     const { Box, Button, Markdown, Text } = $.ui.resolve(e)
     return (
