@@ -624,7 +624,7 @@ export class StreamTracker {
     const s = this.#steps.get(step)
     if (!s) return false
     if (index !== s.index) {
-      const closed = s.index >= 0
+      const closed = s.text !== ''
       s.index = index
       s.text = piece
       return closed
