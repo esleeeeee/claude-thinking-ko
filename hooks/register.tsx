@@ -9,22 +9,24 @@
 // as written, translated in the background, and drawn again via `$.ui.invalidate` once the
 // translation lands; a block still being generated stays as written, one waiting gets a mark.
 //
-// Thinking: there is no render site for thinking blocks, so it is not replaced in place. The
-// thinking text is read from the response stream (`turn.step` thinking chunks) as each block
-// ends, translated the same way, and shown in the band above the prompt (latest thought) and
-// in the `/thinking-ko` pane (recent thoughts). Claude Code only receives thinking text when
-// thinking summaries are on (`"showThinkingSummaries": true`); without it the blocks arrive
-// empty and the band says so.
+// Thinking: there is no render site for thinking blocks, so the original thinking row stays as
+// it is. The thinking text is read from the response stream (`turn.step` thinking chunks) as
+// each block ends, translated the same way, and drawn as a quote at the top of the reply block
+// that follows it in the same turn (that block's drawing only). The band above the prompt shows
+// progress, and the `/thinking-ko` pane lists recent thoughts. Claude Code only receives thinking
+// text when thinking summaries are on (the desktop app does by default; the terminal needs
+// `"showThinkingSummaries": true`); without it the blocks arrive empty and the band says so.
 import type { HttpInit, HttpResponse, Register } from 'claude-code'
 
 import {
   answerId,
   clip,
   displayText,
-  headLines,
   PENDING_THINKING,
   PENDING_THINKING_RETRY,
+  quoteBlock,
   redact,
+  sameTextKey,
   shortHash,
   Slots,
   StreamTracker,
@@ -42,10 +44,10 @@ import type { Complete } from './translators'
 export const MAX_CACHE_ENTRIES = 100
 /** A translation longer than this is shown but not cached ($.store holds 4 MiB in all). */
 export const MAX_CACHED_CHARS = 8000
-/** Thoughts kept for the band and the pane. */
+/** Thoughts kept for the pane. */
 export const MAX_THOUGHTS = 20
-/** Lines of the latest thought the band shows at most. */
-export const BAND_MAX_LINES = 10
+/** Reply blocks remembered with the thoughts that came before them. */
+const MAX_ATTACHED = 50
 export const PANE_ID = 'thinking-ko'
 export const COMMAND = 'thinking-ko'
 /** Shown while Claude Code does not receive thinking text (thinking summaries off). */
@@ -54,13 +56,22 @@ export const OMITTED_HINT = '생각 요약이 꺼져 잇어서 생각을 못 옮
 export const RESTART_HINT = '생각 요약 켯어. Claude Code(앱)를 완전히 껏다 켜면 생각이 번역돼.'
 const CACHE_PREFIX = 't:'
 const CACHE_INDEX = 'cache-index'
+const THOUGHT_PREFIX = 'k:'
+const THOUGHT_INDEX = 'thought-index'
 const LOG_MAX_LINES = 500
 const LOG_FLUSH_MS = 2000
 
 type CacheEntry = { h: string; ko: string }
+/** Translated thoughts shown above a reply block, kept with the block's source hash. */
+type ThoughtCacheEntry = { h: string; kos: string[] }
 
 function isCacheEntry(v: unknown): v is CacheEntry {
   return typeof v === 'object' && v !== null && typeof (v as CacheEntry).h === 'string' && typeof (v as CacheEntry).ko === 'string'
+}
+
+function isThoughtCacheEntry(v: unknown): v is ThoughtCacheEntry {
+  const x = v as ThoughtCacheEntry
+  return typeof v === 'object' && v !== null && typeof x.h === 'string' && Array.isArray(x.kos) && x.kos.every(k => typeof k === 'string')
 }
 
 /**
@@ -81,8 +92,14 @@ type Io = {
   write: (path: string, text: string) => Promise<void>
 }
 
-/** One thought of the main conversation: `live` while its block is still streaming. */
-type Thought = { id: string; source: string; live: boolean }
+/** One thought of the main conversation: `live` while its block is still streaming, `gone` when it came empty. */
+type Thought = { id: string; source: string; live: boolean; gone?: boolean }
+
+/** A thought drawn above a reply: one of this run's, or a translation restored from the cache. */
+type InlineThought = Thought | { ko: string }
+
+/** A reply block of this run and the thoughts that came before it in its turn. */
+type Attached = { text: string; isOpen: boolean; thoughts: Thought[]; requestId?: string }
 
 /** How a thought is drawn: a status line, or markdown (dim for an untranslated original). */
 type ThoughtView = { status: string } | { markdown: string; dim: boolean }
@@ -108,6 +125,13 @@ export const register: Register = (on, options) => {
   const tracker = new StreamTracker()
   const collector = new ThoughtCollector()
   const thoughts: Thought[] = []
+  /** Thoughts of a turn not yet drawn above a reply, by turn id. */
+  const unplaced = new Map<string, Thought[]>()
+  const attached: Attached[] = []
+  /** Reply block (message id) → the thoughts drawn above it. */
+  const aboveReply = new Map<string, InlineThought[]>()
+  const lookedThoughts = new Set<string>()
+  const cachedThoughts = new Set<string>()
   /** A thinking block arrived without text (thinking summaries off). */
   let omitted = false
   /** This module wrote showThinkingSummaries to the user's settings (takes effect on restart). */
@@ -180,22 +204,27 @@ export const register: Register = (on, options) => {
     }
   }
 
-  const writeCache = (id: string, source: string, ko: string): void => {
+  /** Keeps `value` under `prefix + requestId`, the newest MAX_CACHE_ENTRIES per prefix. */
+  const putCache = (prefix: string, indexKey: string, requestId: string, value: unknown): void => {
     const x = io
-    if (!x || ko.length > MAX_CACHED_CHARS) return
-    const requestId = id.slice(0, id.lastIndexOf('#'))
+    if (!x) return
     cacheWrites = cacheWrites
       .then(async () => {
-        await x.storeSet(CACHE_PREFIX + requestId, { h: shortHash(source), ko } satisfies CacheEntry)
-        const raw = await x.storeGet(CACHE_INDEX)
+        await x.storeSet(prefix + requestId, value)
+        const raw = await x.storeGet(indexKey)
         const index = (Array.isArray(raw) ? raw : []).filter((k): k is string => typeof k === 'string' && k !== requestId)
         index.push(requestId)
         for (const old of index.splice(0, Math.max(0, index.length - MAX_CACHE_ENTRIES))) {
-          await x.storeDelete(CACHE_PREFIX + old)
+          await x.storeDelete(prefix + old)
         }
-        await x.storeSet(CACHE_INDEX, index)
+        await x.storeSet(indexKey, index)
       })
       .catch((e: unknown) => log(`fail cache-write err=${JSON.stringify(clip(String(e), 160))}`))
+  }
+
+  const writeCache = (id: string, source: string, ko: string): void => {
+    if (ko.length > MAX_CACHED_CHARS) return
+    putCache(CACHE_PREFIX, CACHE_INDEX, id.slice(0, id.lastIndexOf('#')), { h: shortHash(source), ko } satisfies CacheEntry)
   }
 
   // ---- translation: one pool per kind (thinking 2 requests at a time, replies 1, as the original) ----
@@ -231,7 +260,8 @@ export const register: Register = (on, options) => {
     request: request('thinking'),
   })
 
-  const viewOf = (t: Thought): ThoughtView => {
+  const viewOf = (t: InlineThought): ThoughtView => {
+    if ('ko' in t) return { markdown: t.ko, dim: false }
     if (t.live) return { status: STREAMING_THINKING }
     const st = thinker.get(t.id)
     if (st?.status === 'done') return { markdown: st.ko, dim: false }
@@ -243,6 +273,8 @@ export const register: Register = (on, options) => {
   const thoughtEnded = (live: Thought, id: string, text: string): void => {
     const source = trimBlankLines(text)
     if (!source.trim()) {
+      live.gone = true
+      live.live = false
       const at = thoughts.indexOf(live)
       if (at >= 0) thoughts.splice(at, 1)
       if (!omitted) log('thinking arrived without text (thinking summaries off)')
@@ -254,6 +286,73 @@ export const register: Register = (on, options) => {
     live.source = source
     live.live = false
     thinker.enqueue(live.id, source)
+  }
+
+  /** The quote drawn above a reply for its thoughts; '' when there is none to show. */
+  const quoteOf = (list: readonly InlineThought[]): string =>
+    list
+      .filter(t => !('gone' in t && t.gone))
+      .map(t => {
+        const view = viewOf(t)
+        if ('status' in view) return `> ✻ _${view.status}_`
+        return quoteBlock(view.markdown, view.dim ? '✻ (번역 실패, 원문) ' : '✻ ')
+      })
+      .join('\n>\n')
+
+  /**
+   * The thoughts above the reply block `requestId`: the ones that came before it in its turn,
+   * matched by its text (claimed for good once the block is complete), else those cached for it.
+   */
+  const thoughtsAbove = async (
+    get: (key: string) => Promise<unknown>,
+    requestId: string,
+    source: string,
+  ): Promise<InlineThought[] | undefined> => {
+    const known = aboveReply.get(requestId)
+    if (known) return known
+    const key = sameTextKey(source)
+    for (const a of attached) {
+      if (a.requestId !== undefined) continue
+      const text = sameTextKey(a.text)
+      if (!a.isOpen && text === key) {
+        a.requestId = requestId
+        aboveReply.set(requestId, a.thoughts)
+        return a.thoughts
+      }
+      if (a.isOpen && key && text.startsWith(key)) return a.thoughts
+    }
+    if (lookedThoughts.has(requestId)) return undefined
+    lookedThoughts.add(requestId)
+    try {
+      const v = await get(THOUGHT_PREFIX + requestId)
+      if (isThoughtCacheEntry(v) && v.h === shortHash(source)) {
+        const restored = v.kos.map(ko => ({ ko }))
+        aboveReply.set(requestId, restored)
+        cachedThoughts.add(requestId)
+        return restored
+      }
+    } catch {
+      // no cache
+    }
+    return undefined
+  }
+
+  /** Caches the translated thoughts above a reply block once all of them are settled. */
+  const cacheThoughts = (requestId: string, source: string, list: readonly InlineThought[]): void => {
+    if (cachedThoughts.has(requestId)) return
+    const kos: string[] = []
+    for (const t of list) {
+      if ('ko' in t) kos.push(t.ko)
+      else if (t.gone) continue
+      else {
+        const st = thinker.get(t.id)
+        if (t.live || st === undefined || st.status === 'pending') return // not settled yet
+        if (st.status === 'done') kos.push(st.ko)
+      }
+    }
+    cachedThoughts.add(requestId)
+    if (kos.length === 0 || kos.join('').length > MAX_CACHED_CHARS) return
+    putCache(THOUGHT_PREFIX, THOUGHT_INDEX, requestId, { h: shortHash(source), kos } satisfies ThoughtCacheEntry)
   }
 
   /**
@@ -313,6 +412,8 @@ export const register: Register = (on, options) => {
     answers.reset()
     thinker.reset()
     thoughts.length = 0
+    unplaced.clear()
+    attached.length = 0
     await flushLog()
     return next(e)
   })
@@ -348,12 +449,32 @@ export const register: Register = (on, options) => {
       const t = closed && live.get(closed.index)
       if (t && closed) thoughtEnded(t, `th:${e.turnId}:${e.index}:${closed.index}`, closed.text)
     }
+    // The reply block being written, with the turn's thoughts that came before it.
+    let reply: { index: number; at: Attached } | undefined
+    const endReply = (): void => {
+      if (reply) reply.at.isOpen = false
+      reply = undefined
+    }
     const stream = next(e)
     try {
       for await (const chunk of stream) {
         let changed = false
         if (chunk.kind === 'text') changed = tracker.text(step, chunk.index, chunk.text)
         else if ('index' in chunk && typeof chunk.index === 'number') changed = tracker.other(step, chunk.index)
+        if (thinking !== undefined && 'index' in chunk && typeof chunk.index === 'number') {
+          if (chunk.kind === 'text' && reply?.index === chunk.index) reply.at.text += chunk.text
+          else if (chunk.kind === 'text' || reply !== undefined) {
+            endReply()
+            const before = unplaced.get(e.turnId) ?? []
+            if (chunk.kind === 'text' && before.length > 0) {
+              const at: Attached = { text: chunk.text, isOpen: true, thoughts: before.splice(0) }
+              attached.push(at)
+              if (attached.length > MAX_ATTACHED) attached.splice(0, attached.length - MAX_ATTACHED)
+              reply = { index: chunk.index, at }
+              changed = true
+            }
+          }
+        }
         if (thinking !== undefined) {
           if (chunk.kind === 'thinking') {
             const { opened, closed } = collector.thinking(thinking, chunk.index, chunk.text)
@@ -362,6 +483,7 @@ export const register: Register = (on, options) => {
               const t: Thought = { id: '', source: '', live: true }
               live.set(chunk.index, t)
               thoughts.push(t)
+              unplaced.set(e.turnId, [...(unplaced.get(e.turnId) ?? []), t])
               if (thoughts.length > MAX_THOUGHTS) thoughts.splice(0, thoughts.length - MAX_THOUGHTS)
             }
             changed ||= opened || closed !== undefined
@@ -376,6 +498,7 @@ export const register: Register = (on, options) => {
       }
     } finally {
       tracker.end(step)
+      endReply()
       if (thinking !== undefined) close(collector.end(thinking))
       // A block left live (the stream was cut) is dropped rather than shown as thinking forever.
       for (const t of live.values()) if (t.live && thoughts.includes(t)) thoughts.splice(thoughts.indexOf(t), 1)
@@ -399,20 +522,23 @@ export const register: Register = (on, options) => {
     if (!answers.get(id)) {
       if (!armed) history.add(e.requestId)
       // History is shown as written (no retroactive translation); so is a block still being generated.
-      if (history.has(e.requestId) || tracker.isGenerating(source)) return next(e)
-      answers.enqueue(id, source)
+      if (!history.has(e.requestId) && !tracker.isGenerating(source)) answers.enqueue(id, source)
     }
 
-    const text = displayText(source, answers.get(id))
-    return text === undefined ? next(e) : next({ ...e, props: { ...e.props, text } })
+    const above = await thoughtsAbove(key => $.store.get(key), e.requestId, source)
+    if (above && aboveReply.has(e.requestId)) cacheThoughts(e.requestId, source, above)
+    const quote = above ? quoteOf(above) : ''
+    const body = displayText(source, answers.get(id)) ?? source
+    if (!quote && body === source) return next(e)
+    return next({ ...e, props: { ...e.props, text: quote ? `${quote}\n\n${body}` : body } })
   })
 
-  // The band above the prompt: the latest thought, translated; or, while Claude Code receives no
-  // thinking text, a button that turns thinking summaries on.
+  // The band above the prompt: thinking progress; or, while Claude Code receives no thinking text,
+  // a button that turns thinking summaries on.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const last = thoughts.at(-1)
-    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     if (!last) {
       if (summariesWritten) {
         return (
@@ -439,21 +565,13 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    const view = viewOf(last)
-    if ('status' in view) {
-      return (
-        <Box flexDirection="column">
-          <Text dimColor>✻ {view.status}</Text>
-        </Box>
-      )
-    }
-    const room = Math.max(2, Math.min(BAND_MAX_LINES, e.props.maxRows - 2))
-    const shown = headLines(view.markdown, room)
+    // Progress only: the translated thought itself is drawn above its reply.
+    const busy = [...thoughts].reverse().find(t => 'status' in viewOf(t))
+    if (!busy) return next(e)
+    const view = viewOf(busy)
     return (
       <Box flexDirection="column">
-        <Text dimColor>✻ 생각{view.dim ? ' (번역 실패, 원문)' : ''}</Text>
-        <Markdown text={shown.text} dimColor={view.dim} />
-        {shown.cut && <Text dimColor>… 전체는 /{COMMAND}</Text>}
+        <Text dimColor>✻ {'status' in view ? view.status : ''}</Text>
       </Box>
     )
   })

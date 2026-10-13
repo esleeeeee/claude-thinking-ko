@@ -748,11 +748,15 @@ export const PENDING_ANSWER = '_옮기는 중.._'
 export const PENDING_ANSWER_RETRY = '_옮기는 중.. (재시도)_'
 
 /** 상태에 따라 그릴 글. undefined면 원문을 그대로 둔다. */
-/** 글을 앞에서부터 maxLines줄까지 자른다. 잘렸으면 cut이 true. */
-export function headLines(text: string, maxLines: number): { text: string; cut: boolean } {
+/** 글을 마크다운 인용문으로 만든다. 첫 줄 앞에 head를 붙인다(답변 위에 붙이는 생각). */
+export function quoteBlock(text: string, head: string): string {
   const lines = text.split('\n')
-  if (lines.length <= maxLines) return { text, cut: false }
-  return { text: lines.slice(0, Math.max(1, maxLines)).join('\n'), cut: true }
+  return [`> ${head}${lines[0] ?? ''}`, ...lines.slice(1).map(l => (l ? `> ${l}` : '>'))].join('\n')
+}
+
+/** 화면 글과 스트림 글을 맞춰 보려고 공백을 하나로 접는다. */
+export function sameTextKey(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 export function displayText(source: string, state: TranslationState | undefined): string | undefined {

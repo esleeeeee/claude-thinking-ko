@@ -8,14 +8,15 @@ import {
   cleanAnswer,
   clip,
   displayText,
-  headLines,
   maxTokensFor,
   MAX_OUTPUT_TOKENS,
   MAX_PENDING_BLOCKS,
   OrderedTranslator,
+  quoteBlock,
   PENDING_ANSWER,
   PENDING_ANSWER_RETRY,
   redact,
+  sameTextKey,
   shortHash,
   Slots,
   StreamTracker,
@@ -524,8 +525,8 @@ describe('프롬프트·표시', () => {
     expect(thinking.includes('python util.py')).toBe(false)
   })
 
-  test('headLines: 줄 수를 넘으면 앞부분만', () => {
-    expect(headLines('a\nb\nc', 5)).toEqual({ text: 'a\nb\nc', cut: false })
-    expect(headLines('a\nb\nc', 2)).toEqual({ text: 'a\nb', cut: true })
+  test('quoteBlock / sameTextKey: 생각을 인용문으로, 공백 차이는 같은 글로', () => {
+    expect(quoteBlock('**제목**\n\n본문', '✻ ')).toBe('> ✻ **제목**\n>\n> 본문')
+    expect(sameTextKey('  Done.\n\n  Next ')).toBe('Done. Next')
   })
 })
