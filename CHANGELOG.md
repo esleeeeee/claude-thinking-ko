@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.0.0 — 2026-10-13 (Claude Code mod)
+
+OMP 확장을 Claude Code mod(플러그인)로 옮겼습니다. 원래 OMP 버전은 `legacy/`에 그대로 보존합니다.
+
+### 바뀐 점
+
+- 답변 번역: `ui.render`의 `AssistantMessage` 자리에서 그릴 글만 바꿉니다. 처음엔 원문, 번역은 백그라운드, 끝나면 `$.ui.invalidate`로 다시 그립니다. 생성 중이면 원문, 대기 중이면 `_옮기는 중.._` 표시.
+- 번역기: 기본은 `$.model.complete`로 Claude Haiku. `gemini_api_key`를 설정하면 `$.http.fetch`로 Gemini 공식 API. 키는 헤더로만 보내고 로그·저장소에 남기지 않습니다.
+- 번역 프롬프트(반말·구어체, ㅆ→ㅅ, 코드·경로·숫자·URL 보존)와 순서 보장 큐·동시 요청 제한·타임아웃·재시도·실패 시 원문 로직은 원본에서 옮겼습니다. 요청 헤징은 뺐습니다.
+- 캐시: `$.store`에 메시지 id 기준(최근 100개). 로그: `~/.claude/thinking-ko/thinking-ko.log`, 원문·번역문 없이 상태만.
+- 생각(thinking) 번역은 하지 않습니다. Claude Code 2.1.296에서 mod가 받는 thinking 블록에 텍스트가 없고(서명만) 렌더 자리도 없기 때문입니다.
+
+### 검증
+
+- `claude plugin validate --strict .` 통과, `claude plugin test .` 31개 통과(모델·HTTP 모킹). 기존 OMP 테스트 66개(`legacy/`) 통과.
+- 실제 화면 표시는 클라우드 세션에서 확인하지 못했습니다. README 끝의 로컬 체크리스트로 확인하세요.
+
 ## 1.0.1 — 2026-09-28
 
 ### 수정

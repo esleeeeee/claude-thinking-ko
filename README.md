@@ -1,199 +1,165 @@
-# omp-thinking-ko
+# thinking-ko — Claude Code 답변 한국어 표시 mod
 
-OMP에 표시되는 영어 생각과 답변을 한국어로 옮기는 비공식 확장입니다. Gemini를 번역기로 사용하고, 화면 표시만 바꿉니다. OMP 본체나 원래 메시지·thinking 서명은 수정하지 않습니다.
+Claude Code 화면에 보이는 Claude의 **답변**을 반말·구어체 한국어로 바꿔 보여 주는 비공식 mod(플러그인)입니다. **화면 표시만** 바꿉니다. 대화 기록(transcript)과 Claude가 읽는 내용은 그대로입니다.
 
-**English:** An unofficial [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) extension that translates visible thinking and assistant replies into informal Korean. Bring your own OMP and Google Antigravity authentication. This repository does not provide credentials, a shared account, or a hosted translation service.
+원본은 OMP(oh-my-pi)용 확장 [hvvsdcm/omp-thinking-ko](https://github.com/hvvsdcm/omp-thinking-ko)(MIT)이고, 이 저장소는 그 포크를 Claude Code mod로 옮긴 것입니다. 원래 OMP 버전은 [`legacy/`](legacy/)에 그대로 보존돼 있습니다.
 
-> **설치 전 확인:** 생각과 최종 답변의 원문이 번역을 위해 Google Antigravity/Gemini로 전송됩니다. 원문에 코드·비밀값이 포함돼 있으면 함께 전송될 수 있습니다. 민감한 작업에는 사용하지 마세요. 각 사용자의 계정 한도·비용·서비스 약관이 적용됩니다.
+> **설치 전 확인:** 답변 원문이 번역을 위해 별도 모델 요청으로 전송됩니다(기본: 내 Claude 계정의 Haiku, 옵션: Google Gemini API). 답변에 코드·비밀값이 들어 있으면 함께 전송될 수 있으니 민감한 작업에는 쓰지 마세요. 번역 요청만큼 사용량·비용이 늘어납니다.
 
-## 어떤 기능인가요?
+## 기능
 
-- 영어 생각을 한국어 혼잣말처럼 표시합니다. 아직 생성 중이면 `생각 중..`, 번역 대기 중이면 `생각 옮기는 중..`으로 보입니다.
-- **최종 답변도 번역하거나 말투를 바꿉니다.** 생각 전용 확장이 아닙니다.
-- 이미 한국어인 문장도 반말·구어체로 바꾸며, `했어 → 햇어`, `있어 → 잇어` 같은 말투를 사용합니다. 프롬프트에 가벼운 욕설 허용 규칙이 있습니다. 업무용 정중체 번역기가 아닙니다.
-- **v1.0.1부터 생각·답변 모두 말투를 프롬프트로만 맞춥니다.** 코드 문자열까지 바꾸던 강제 `ㅆ→ㅅ` 치환과 코드펜스 제거는 하지 않습니다. 모델이 간혹 `했어`를 남겨도 코드 보호를 위해 그대로 표시합니다.
-- 번역 결과를 세션에 캐시해 같은 세션을 재개할 때 재사용합니다. 번역 캐시는 모델 문맥에 넣지 않습니다.
-- 타임아웃이나 번역 실패 후 한 번 재시도하고, 최종 실패 시 원문을 표시합니다.
-- Claude 전용 필터는 없습니다. OMP에서 해당 thinking/text 이벤트를 내보내는 다른 모델의 메시지에도 적용될 수 있습니다.
+- Claude의 답변 블록을 한국어 혼잣말 말투로 바꿔 그립니다. 이미 한국어인 답변도 반말·구어체로 바꿉니다.
+- 말투는 원본 그대로입니다: 짧은 반말, 감탄사·말줄임 허용, 가벼운 욕설 허용, 격식체 금지, `했어 → 햇어`, `있어 → 잇어` 같은 ㅆ→ㅅ 표기. 업무용 정중체 번역기가 아닙니다.
+- 코드 블록·인라인 코드·파일 경로·명령어·식별자·URL·숫자는 바꾸지 않도록 지시하고, 마크다운 구조를 유지하게 합니다. 원본 v1.0.1처럼 번역 결과를 정규식으로 고치는 후처리는 하지 않습니다(코드 보호).
+- 표시 흐름
+  - 생성 중인 블록: 원문 그대로
+  - 번역 대기 중: 원문 끝에 `_옮기는 중.._` (실패 후 재시도 대기면 `_옮기는 중.. (재시도)_`)
+  - 번역 완료: 번역문으로 다시 그림
+  - 최종 실패: 원문 그대로
+- 번역은 백그라운드에서 돌고, 결과가 오면 `$.ui.invalidate`로 화면을 다시 그립니다.
+- 원본의 안정장치를 옮겼습니다: 순서 보장 큐, 동시 요청 2개 제한(취소가 안 되는 요청은 끝날 때까지 자리 차지), 길이에 비례한 타임아웃(12초 + 1000자마다 2.5초), 실패 시 1회 재시도(60초 뒤, 또는 다른 번역이 성공한 직후), 대기 8개 초과 시 가장 오래된 항목은 원문으로 확정.
+- 번역 결과는 메시지 id 기준으로 `$.store`에 캐시해(최근 100개) 세션을 재개해도 다시 요청하지 않습니다.
 
-예시(기능 설명용이며 실제 실행 캡처가 아닙니다):
+예시(설명용, 실제 실행 캡처 아님):
 
 ```text
 원문: I found the bug. I'll fix it.
 표시: 오류를 찾앗어. 고쳐볼게.
 ```
 
-## 준비물과 호환성
+## 한계
 
-1. [OMP](https://github.com/can1357/oh-my-pi)가 설치돼 있어야 합니다. 확인: `omp --version`.
-2. 본인의 **Google Antigravity 계정**으로 OMP에 로그인해야 합니다. OMP 안에서 `/login google-antigravity`를 실행합니다. 저장소에 토큰을 넣거나 개발자에게 전달하지 마세요.
-3. OMP에서 `google-antigravity/gemini-3.8-flash` 모델을 사용할 수 있어야 합니다. 접근 권한·모델 제공 여부는 계정과 제공자에 따라 달라집니다. 계정만 있으면 무조건 사용 가능하거나 무료라는 뜻은 아닙니다.
+### 생각(thinking)은 번역하지 않습니다
 
-이 릴리스의 기존 실사용 확인 환경은 **Windows + OMP 18.2.11**입니다. 자동 테스트는 Node.js 24에서 실행하며 Windows·Linux·macOS CI를 제공합니다. 다른 운영체제의 실제 TUI 표시와 다른 OMP 버전까지 보장하지는 않습니다.
+OMP 버전은 생각과 답변을 모두 번역했지만, 이 mod는 **답변만** 번역합니다.
 
-번역기는 `thinking-ko.ts` 상단의 `MODEL` 상수로 고정돼 있습니다. 기본 모델을 사용할 수 없다면 본인 OMP에서 지원하는 모델로 이 값을 바꾸고 인증을 설정해야 합니다. 다른 모델의 번역 품질·호환성은 별도 검증 대상입니다.
+- Claude Code의 mod API에는 thinking 블록을 그리는 렌더 자리가 없어서 제자리 교체가 불가능합니다.
+- 대신 읽어서 별도 영역(Pane 등)에 보여 줄 수 있는지 Claude Code 2.1.296에서 확인했습니다. `$.session.messages({ as: "api" })`와 응답 스트림(`turn.step`)의 thinking 조각 모두에서, thinking 블록은 존재하지만 **텍스트가 빈 문자열이고 서명(signature)만** 들어 있었습니다(opus·sonnet, `alwaysThinkingEnabled` 상태). 번역할 원문이 없으므로 우회하지 않고 기능에서 뺐습니다.
+- 나중에 Claude Code가 mod에 생각 텍스트를 넘겨 주게 되면 다시 검토할 수 있습니다.
 
-## 설치 — 파일 복사 방식 (권장)
+### 그 밖의 한계
 
-관리자 권한, Git, npm, Bun을 별도로 설치하지 않아도 됩니다. OMP 실행 파일은 필요합니다.
+- **과거 메시지는 소급 번역하지 않습니다.** mod가 켜진 뒤 이번 실행에서 턴이 시작되기 전에 그려진 답변(재개한 세션의 기록 등)은 캐시가 있을 때만 번역문으로 보이고, 새로 요청하지 않습니다.
+- 도구 호출 사이 글의 **요약 행(`isSummary`)** 은 건드리지 않습니다.
+- "생성 중" 판정은 응답 스트림의 text 조각과 화면 글을 비교하는 방식입니다. 화면이 원문 일부를 숨기는 경우 등에서 판정이 어긋날 수 있습니다.
+- LLM 번역은 무손실을 보장하지 않습니다. 실행할 명령·중요한 수치는 원문과 대조하세요. **ctrl+o**(상세 보기)나 mod를 끈 상태에서 원문을 볼 수 있습니다.
+- Claude Code mod API는 early access라 버전이 바뀌면 동작이 달라질 수 있습니다. 확인한 버전은 **2.1.296**입니다.
+- Claude 전용 필터는 없습니다. 화면에 그려지는 모든 assistant 답변 블록(서브에이전트 포함)이 대상입니다.
 
-1. [v1.0.1 릴리스](https://github.com/hvvsdcm/omp-thinking-ko/releases/tag/v1.0.1)에서 `thinking-ko.ts`를 다운로드합니다. 또는 소스 ZIP을 내려받아 압축을 풉니다.
-2. 다운로드한 `thinking-ko.ts`가 있는 폴더에서 아래 명령을 실행합니다. **기존 파일이 있으면 덮어쓰지 않고 중단**합니다. 업데이트하려면 기존 파일을 extensions 폴더 밖에 먼저 백업하세요.
+## 준비물
 
-### Windows PowerShell
+- **Claude Code 2.1.287 이상** (mod 지원 버전). 확인: `claude --version`
+- 기본 번역기(Haiku)는 지금 쓰는 Claude Code 계정·인증을 그대로 씁니다. 별도 키가 필요 없습니다.
+- Gemini를 쓰려면 본인의 [Gemini API 키](https://aistudio.google.com/apikey)가 필요합니다(선택).
 
-```powershell
-$dir = Join-Path $HOME '.omp/agent/extensions'
-New-Item -ItemType Directory -Force $dir | Out-Null
-$dest = Join-Path $dir 'thinking-ko.ts'
-if (Test-Path $dest) { throw '기존 thinking-ko.ts를 extensions 폴더 밖에 백업한 뒤 다시 실행하세요.' }
-Copy-Item -LiteralPath ./thinking-ko.ts -Destination $dest
+## 설치
+
+### 마켓플레이스로 설치 (권장)
+
+Claude Code 프롬프트에서:
+
+```text
+/plugin install thinking-ko --marketplace esleeeeee/claude-thinking-ko
 ```
 
-### macOS / Linux
+마켓플레이스 추가를 물으면 `y`, 이어서 설치 범위(사용자 범위 권장)를 고릅니다. 설정 화면이 나오면 Gemini 키는 비워 두면 됩니다(Haiku 사용). 설치 직후 그 세션부터 적용됩니다.
+
+### 폴더에서 바로 실행 (개발·시험용)
 
 ```sh
-mkdir -p "$HOME/.omp/agent/extensions"
-if [ -e "$HOME/.omp/agent/extensions/thinking-ko.ts" ]; then
-  printf '%s\n' '기존 thinking-ko.ts를 extensions 폴더 밖에 백업한 뒤 다시 실행하세요.'
-else
-  cp ./thinking-ko.ts "$HOME/.omp/agent/extensions/thinking-ko.ts"
-fi
+git clone https://github.com/esleeeeee/claude-thinking-ko
+claude --plugin-dir ./claude-thinking-ko
 ```
 
-3. 기본 프로필의 `~/.omp/agent/config.yml`에 다음 설정을 **병합**합니다. 파일 전체를 예제로 덮어쓰지 마세요. `enabledModels`가 이미 있으면 기존 목록에 Gemini 항목만 추가합니다.
+`--plugin-dir`은 그 세션에만 적용됩니다. 대화형 세션에서는 파일을 고치면 자동으로 다시 불러옵니다. 마켓플레이스 설치와 `--plugin-dir`을 **동시에 쓰지 마세요**(번역 요청이 두 번 나갈 수 있습니다).
 
-```yaml
-hideThinkingBlock: false
-enabledModels:
-  - google-antigravity/gemini-3.8-flash
-```
+## 설정
 
-`config.example.yml`에도 같은 예제가 있습니다. `disabledProviders`에 `google-antigravity`가 있다면 해당 항목을 제거해야 합니다.
+| 항목 | 기본값 | 설명 |
+| --- | --- | --- |
+| `gemini_api_key` | (비어 있음) | 비우면 Claude Haiku로 번역. 넣으면 Gemini 공식 API(`generativelanguage.googleapis.com`)로 번역. 민감 값으로 표시돼 있어 설치형 플러그인은 보안 저장소에 보관됩니다. |
+| `gemini_model` | `gemini-flash-latest` | 키가 있을 때 쓸 Gemini 모델 |
+| `claude_model` | `haiku` | 키가 없을 때 쓸 Claude 모델(별칭 또는 전체 id) |
 
-4. OMP를 종료하고 다시 실행합니다. 새 thinking 블록이나 답변이 끝나면 잠시 뒤 한국어 표시로 바뀝니다. 번역 기록이 없는 과거 메시지는 자동으로 소급 번역하지 않습니다.
+- **기본(Haiku):** 아무것도 설정하지 않으면 `$.model.complete`로 세션의 Claude 클라이언트를 통해 Haiku를 부릅니다.
+- **Gemini 키 넣기(마켓플레이스 설치):** 설치 때 설정 화면에서 넣거나, 나중에 터미널에서
 
-**프로필/사용자 지정 경로:** 위 명령은 기본 프로필용입니다. `omp --profile NAME`을 쓴다면 확장·설정 위치는 `~/.omp/profiles/NAME/agent/` 아래입니다. `PI_CODING_AGENT_DIR`을 사용 중이라면 그 경로의 `extensions/`와 `config.yml`을 사용하세요. 현재 확장의 로그 위치는 프로필과 무관하게 아래에 기재된 기본 경로입니다.
+  ```sh
+  printf '%s' '{"gemini_api_key":"여기에_키"}' | claude plugin configure thinking-ko@claude-thinking-ko --values-stdin
+  ```
 
-## 선택: OMP 플러그인 관리자로 설치
+  키를 빼려면 같은 방법으로 `""`를 넣습니다. 비민감 항목(`gemini_model`, `claude_model`)은 `/config` 메뉴에서도 바꿀 수 있습니다.
+- **`--plugin-dir`로 실행할 때:** 옵션은 `~/.claude/settings.json`의 `pluginConfigs`에서 읽습니다(키 이름 `thinking-ko`, 안 되면 `thinking-ko@inline`). 이 경우 키가 **평문으로** 저장되므로 그 파일을 공유·커밋하지 마세요.
 
-Git 소스 설치를 지원하는 OMP와 설치에 필요한 Bun 환경이 준비돼 있다면:
+  ```json
+  { "pluginConfigs": { "thinking-ko": { "options": { "gemini_api_key": "여기에_키" } } } }
+  ```
 
-```sh
-omp plugin install github:hvvsdcm/omp-thinking-ko#v1.0.1
-```
-
-로그인과 `hideThinkingBlock`/모델 설정은 파일 복사 방식과 같습니다. **파일 복사 설치와 플러그인 설치를 동시에 사용하지 마세요.** 중복 실행으로 번역 요청이 늘어날 수 있습니다. 로컬 `plugin link`는 Windows에서 심볼릭 링크 권한이 필요할 수 있습니다.
-
-제거:
-
-```sh
-omp plugin uninstall omp-thinking-ko
-```
-
-## 업데이트 — 기존 사용자
-
-먼저 새 릴리스의 `thinking-ko.ts`를 다운로드하고 OMP를 종료합니다. **개인 설정·인증 파일을 바꿀 필요는 없습니다.** 현재 사용 중인 설치 방식 하나만 업데이트하세요.
-
-### 파일 복사 설치
-
-다운로드한 새 `thinking-ko.ts`가 있는 폴더에서 실행합니다. 기존 확장은 `extensions` 바깥의 `backups`에 복사한 뒤 교체합니다.
-
-Windows PowerShell (기본 프로필):
-
-```powershell
-$ErrorActionPreference = 'Stop'
-$agent = Join-Path $HOME '.omp/agent'
-$dest = Join-Path $agent 'extensions/thinking-ko.ts'
-$backup = Join-Path $agent 'backups'
-New-Item -ItemType Directory -Force $backup | Out-Null
-if (Test-Path $dest) {
-  Copy-Item -LiteralPath $dest -Destination (Join-Path $backup ("thinking-ko-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.ts'))
-}
-Copy-Item -LiteralPath ./thinking-ko.ts -Destination $dest -Force
-```
-
-macOS / Linux (기본 프로필):
-
-```sh
-(
-  set -e
-  agent="$HOME/.omp/agent"
-  backup="$(mktemp -d "$agent/thinking-ko-backup.XXXXXX")"
-  if [ -f "$agent/extensions/thinking-ko.ts" ]; then
-    cp "$agent/extensions/thinking-ko.ts" "$backup/thinking-ko.ts"
-  fi
-  cp ./thinking-ko.ts "$agent/extensions/thinking-ko.ts"
-)
-```
-
-이후 OMP를 다시 실행합니다. 프로필/사용자 지정 경로는 위 설치 절의 경로 안내에 맞춰 바꾸세요.
-
-### 플러그인 설치
-
-아래 명령으로 새 버전을 설치한 뒤 OMP를 재시작합니다.
-
-```sh
-omp plugin install github:hvvsdcm/omp-thinking-ko#v1.0.1
-```
-
-**기존 번역 캐시:** v1.0.0에서 이미 번역해 저장한 메시지는 다시 번역하지 않습니다. 그 메시지에 있던 표시 오류도 자동 복구되지 않습니다. 새 대화의 새 메시지로 수정 여부를 확인하세요. 과거 원문이 필요하면 확장을 끄고 해당 세션을 재개하세요.
+- 키는 **코드나 이 저장소에 절대 넣지 마세요.** mod는 키를 URL이 아닌 `x-goog-api-key` 헤더로만 보내고, 로그에 남기지 않습니다.
 
 ## 끄기와 제거
 
-일시 중지하려면 OMP 시작 전에 `THINKING_KO=0`을 설정합니다.
-
-```powershell
-# Windows PowerShell — 현재 터미널에만 적용
-$env:THINKING_KO = '0'
-omp
-# 다시 켜기: Remove-Item Env:THINKING_KO
-```
-
-```sh
-# macOS / Linux — 이 실행에만 적용
-THINKING_KO=0 omp
-```
-
-파일 복사 설치를 제거하려면 설치한 `thinking-ko.ts`만 삭제하고 OMP를 재시작합니다. 다른 확장이나 설정·인증 파일을 삭제하지 마세요. 플러그인 설치는 위 uninstall 명령을 사용합니다.
-
-제거해도 기존 세션의 번역 캐시와 로그는 자동 삭제되지 않습니다. 세션 파일을 직접 편집하면 기록을 손상할 수 있으므로 캐시를 지우려다 전체 세션을 삭제하지 마세요.
+- 끄기: `/plugin`에서 thinking-ko를 비활성화하면 원문 표시로 돌아갑니다(바로 반영되지 않으면 `/reload-plugins`). 대화 기록은 원래 원문이라 따로 되돌릴 것이 없습니다. 다시 켜면 캐시된 번역이 다시 보입니다.
+- 제거: `/plugin`에서 제거하거나 `claude plugin uninstall thinking-ko@claude-thinking-ko`. `--plugin-dir`이면 그 옵션 없이 실행하면 됩니다.
+- 남는 데이터: 번역 캐시(`$.store`, mod 전용 저장소)와 로그 파일(아래). 로그는 직접 지워도 됩니다.
 
 ## 개인정보·보안·사용량
 
-- 이 배포본에는 개발자의 API 키, OAuth 토큰, 개인 OMP 설정, 대화 기록, 로그, 인증 DB가 포함되지 않습니다.
-- 인증은 OMP의 `ctx.modelRegistry.getApiKey()`로 **설치한 사용자의 인증 정보**를 받아 OMP의 모델 호출 API에 전달합니다. 별도의 개발자 서버에 보내지 않습니다.
-- 생각·답변 원문은 로컬에서 비밀값을 제거한 뒤 보내는 것이 아닙니다. 번역 제공자에게 전달해도 되는 내용만 사용하세요.
-- `~/.omp/agent/thinking-ko.log`에 상태·오류와 **번역문 앞부분 최대 160자**가 기록됩니다. 약 1MB를 넘으면 `.old`로 회전합니다. 토큰 형태 일부를 가리는 처리는 있지만 모든 민감정보를 제거하는 보장은 없습니다. 로그와 세션 파일을 공개 이슈에 첨부하지 마세요.
-- 전체 번역은 OMP 세션의 `thinking-ko` 사용자 정의 항목에 저장됩니다. 원문과 함께 로컬에 남는 데이터입니다.
-- 번역은 별도의 모델 요청입니다. 생각은 동시 최대 2개, 답변은 1개이며, 느린 요청에는 추가 요청을 보내 먼저 끝난 결과를 쓰기도 합니다. 실패 시 재시도도 있어 메시지 수보다 요청 수가 많을 수 있습니다.
-- 최종 답변의 코드·경로·숫자를 보존하도록 지시하지만 **LLM 번역의 무손실성을 보장하지 않습니다.** 실행할 명령이나 중요한 수치는 원문과 대조하세요. 확장을 끈 뒤 세션을 재개하면 원문을 확인할 수 있습니다.
+- 이 저장소에는 API 키, 토큰, 개인 설정, 대화 기록, 로그가 들어 있지 않습니다.
+- 답변 원문은 비밀값을 걸러 내지 않고 그대로 번역기에 전송됩니다. Haiku는 내 Claude 계정으로, Gemini는 내 키로 Google에 보내집니다. 각 서비스의 약관·요금·데이터 정책이 적용됩니다.
+- 번역 요청은 답변 블록마다 1회, 실패 시 재시도 1회입니다. 긴 답변·잦은 답변일수록 사용량이 늘어납니다.
+- 로그: `~/.claude/thinking-ko/thinking-ko.log` (Windows는 `%USERPROFILE%\.claude\thinking-ko\thinking-ko.log`). 상태·글자 수·소요 시간·오류 종류만 기록하고 **원문·번역문·키는 남기지 않습니다**(최근 500줄 유지). 토큰처럼 생긴 문자열은 한 번 더 가립니다. 그래도 로그를 공개 이슈에 붙일 때는 내용을 확인하세요.
+- 번역 캐시에는 번역문이 저장됩니다(원문은 해시만). 로컬 데이터입니다.
+- 표시만 바꿉니다: 세션에 행을 추가(`session.append`)하거나 모델에 가는 내용을 고치지 않습니다. 응답 스트림 훅(`turn.step`)은 "생성 중" 판정을 위해 조각을 읽기만 하고 그대로 넘깁니다.
 
-## 알려진 제한과 문제 해결
+## 동작 방식 (개발자용)
 
-**원문 대신 표시하는 기능은 비공개 TUI 구조에 의존합니다.** 확장은 실행 중 화면 컴포넌트의 `updateContent()`를 감싸며 OMP 설치 파일을 수정하지 않습니다. OMP 업데이트가 내부 구조를 바꾸면 표시가 깨질 수 있습니다. 패치에 실패하면 가능한 경우 생각 원문 밑에 번역을 덧붙이는 방식으로 돌아갑니다. 이 대체 방식은 답변 번역 표시를 지원하지 않습니다.
-
-이미 터미널 스크롤백으로 나간 메시지에 번역이 도착하면 화면 기록을 다시 내보낼 수 있습니다. 이때 화면이 깜빡이거나 **OMP 시작 전의 셸 출력이 스크롤백에서 사라질 수 있습니다.**
-
-| 증상 | 확인할 것 |
-| --- | --- |
-| 아무 변화가 없음 | 재시작 여부, `THINKING_KO=0` 여부, 확장 설치 위치, `hideThinkingBlock: false` |
-| 번역 실패/원문 유지 | 본인 계정의 로그인·한도, 모델 접근 권한, `enabledModels`와 `disabledProviders` |
-| OMP 업데이트 뒤 이상함 | 확장을 끄고 재시작. OMP 버전과 민감 내용을 제거한 오류 설명만 이슈로 제출 |
-| 요청이 두 번씩 발생하는 것 같음 | 파일 복사본과 플러그인 중복 설치 여부; 느린 요청의 추가 시도는 정상 동작 |
-
-## 개발과 검증
-
-Node.js **24 이상**에서 외부 패키지 설치 없이 실행합니다. `npm install`은 필요하지 않습니다.
-
-```sh
-npm test
+```
+.claude-plugin/plugin.json       mod 매니페스트(userConfig 포함)
+.claude-plugin/marketplace.json  이 저장소를 마켓플레이스로 쓰기 위한 파일
+hooks/hooks.json                 훅 모듈 지정
+hooks/register.ts                훅 연결: ui.render(AssistantMessage), turn.start/step, session.start/end
+hooks/core.ts                    $에 의존하지 않는 로직: 프롬프트, 큐, 슬롯, 타임아웃, 재시도, 정리
+hooks/translators.ts             Haiku($.model.complete) / Gemini($.http.fetch) 요청·응답 처리
+tests/*.test.ts                  claude plugin test용 테스트(모델·HTTP 모킹)
+legacy/                          원래 OMP 확장과 테스트(변경 없음)
 ```
 
-테스트는 큐 순서·동시 요청 제한·타임아웃·재시도·캐시·표시용 사본·스크롤백 재발행을 검사합니다. 모델 호출과 TUI는 테스트용 호스트로 대체되므로 실제 Google 요청, 번역 품질, 실터미널 호환성까지 검증하는 것은 아닙니다. CI에 계정이나 API 키를 넣지 마세요.
+- `ui.render`의 `AssistantMessage` 자리에서 `next({ ...e, props: { ...e.props, text } })`로 그릴 글만 바꿉니다. 엔진 문서상 이 방식은 그림만 바꾸고 저장된 메시지는 그대로 둡니다.
+- 번역 id는 `메시지 id + 원문 해시`입니다. 같은 메시지의 글이 바뀌면 다시 번역합니다.
 
-v1.0.1 배포 전에는 별도로 실제 Gemini 시험 문장 8개(생각 4개·답변 4개)를 번역해 표시용 변환 함수까지 확인했습니다. 코드펜스·한국어 코드 문자열·지정 명령·URL·숫자와 원본 메시지가 보존됐고, 표본에서 기존 반말 말투도 확인했습니다. 이는 모든 입력의 번역 정확도나 모든 터미널에서의 시각 검증을 보장하는 결과는 아닙니다.
+검증:
 
-## 라이선스와 출처
+```sh
+claude plugin validate --strict .
+claude plugin test .
+```
 
-이 확장은 [MIT License](LICENSE)로 배포합니다. OMP 자체를 포함하거나 재배포하지 않으며 OMP/Anthropic/Google의 공식 제품이 아닙니다. OMP와 그 API는 [oh-my-pi](https://github.com/can1357/oh-my-pi) 프로젝트에서 제공합니다. 각 제공자의 계정·서비스 이용 조건은 별도로 적용됩니다.
+원래 OMP 버전 테스트는 `legacy/`에서 `npm test`(Node.js 24)로 돌립니다.
+
+## 원본 출처와 라이선스
+
+- 원본: [hvvsdcm/omp-thinking-ko](https://github.com/hvvsdcm/omp-thinking-ko) — MIT License, Copyright (c) 2026 hvvsdcm
+- Claude Code mod 포팅: esleeeeee
+- 이 저장소도 [MIT License](LICENSE)입니다. Anthropic·Google·OMP의 공식 제품이 아닙니다.
+
+## 로컬 확인 체크리스트 (`claude --plugin-dir`)
+
+클라우드 세션에서는 mod 화면이 그려지지 않아 아래는 직접 확인이 필요합니다.
+
+1. `claude --version`이 2.1.287 이상인지 확인.
+2. 저장소 폴더에서 `claude plugin validate --strict .`와 `claude plugin test .`가 통과하는지 확인.
+3. `claude --plugin-dir /path/to/claude-thinking-ko`로 시작. 시작 화면이나 `claude --debug` 로그에 thinking-ko 로드 오류(`ui.render (AssistantMessage) refused` 등)가 없는지 확인.
+4. 영어로 답할 만한 질문을 보냄(예: "Explain what a race condition is in two sentences, in English.").
+   - 답변이 생성되는 동안은 원문 그대로인지.
+   - 블록이 끝나면 원문 끝에 `_옮기는 중.._`이 붙는지.
+   - 잠시 뒤 반말 한국어(`햇어`, `잇어` 같은 표기)로 바뀌는지.
+5. 코드 블록·경로·명령어·URL·숫자가 들어간 답변을 받아서 그 부분이 그대로인지 확인.
+6. **ctrl+o**(상세 보기)로 원문이 그대로 남아 있는지, 다음 질문에서 Claude가 영어 원문 기준으로 대화를 이어 가는지 확인(대화 기록 무변경).
+7. 도구 호출이 섞인 작업(파일 읽기 등)을 시켜서 도구 사이의 글도 번역되는지, 화면이 깨지지 않는지 확인.
+8. `~/.claude/thinking-ko/thinking-ko.log`에 `start backend=claude:haiku`, `ok backend=...` 줄이 생기고 원문·번역문이 없는지 확인.
+9. 세션을 끝내고 `claude --plugin-dir ... --continue`로 재개: 이전 답변이 요청 없이 캐시로 번역 표시되는지(로그에 새 `ok` 줄이 없는지).
+10. (선택) Gemini: `~/.claude/settings.json`의 `pluginConfigs.thinking-ko.options.gemini_api_key`에 키를 넣고 재시작 → 로그에 `backend=gemini:gemini-flash-latest`가 찍히고 번역이 되는지. 확인 후 키를 지우세요.
+11. (선택) 실패 경로: 존재하지 않는 `claude_model`(예: `no-such-model`)을 넣고 재시작 → `_옮기는 중.. (재시도)_`를 거쳐 원문으로 돌아오는지.
+12. (마켓플레이스 설치 시) `/plugin`에서 비활성화(필요하면 `/reload-plugins`) → 원문 표시로 돌아오는지. 다시 활성화 → 캐시된 번역이 보이는지.
+13. 전체화면 모드·좁은 터미널에서 줄바꿈과 한글 폭이 깨지지 않는지 눈으로 확인.
