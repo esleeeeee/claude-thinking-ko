@@ -1,0 +1,14 @@
+{
+  "name": "claude-thinking-ko",
+  "description": "thinking-ko: a Claude Code mod that shows Claude's replies in casual Korean.",
+  "owner": {
+    "name": "esleeeeee"
+  },
+  "plugins": [
+    {
+      "name": "thinking-ko",
+      "source": "./",
+      "description": "Shows Claude's replies in casual Korean (display only). Claude Haiku by default, Gemini with your own key."
+    }
+  ]
+}
