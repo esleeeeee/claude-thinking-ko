@@ -1,6 +1,6 @@
 {
   "name": "thinking-ko",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Shows Claude's thinking (live, above the prompt) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
   "author": {
     "name": "esleeeeee"

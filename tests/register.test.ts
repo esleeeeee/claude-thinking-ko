@@ -121,7 +121,7 @@ test('기본(Haiku): 처음엔 원문+대기 표시, 번역이 오면 다시 그
   expect(w.calls[0]!.model).toBe('haiku')
   expect(w.calls[0]!.prompt).toBe('<원문>\nI fixed the parser bug.\n</원문>')
   expect(w.calls[0]!.system).toContain('반말')
-  expect(w.calls[0]!.system).toContain('했어→햇어')
+  expect(w.calls[0]!.system).toContain('맞춤법은 표준대로')
   expect(w.calls[0]!.system).toContain('URL, 숫자는 한 글자도 바꾸지 마')
   expect(w.fetches).toEqual([])
   expect(w.store.get('t:msg-1')).toEqual({ h: shortHash('I fixed the parser bug.'), ko: '번역 I fixed the parser bug.' })

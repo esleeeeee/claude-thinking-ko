@@ -16,6 +16,7 @@ import {
   PENDING_ANSWER,
   PENDING_ANSWER_RETRY,
   redact,
+  restoreInlineCode,
   sameTextKey,
   shortHash,
   Slots,
@@ -118,12 +119,12 @@ describe('순수 함수', () => {
     expect(cleanAnswer('\n  \n\tindented\n')).toBe('\tindented')
     expect(cleanAnswer('```bash\nls\n```\n\n끝났다.')).toBe('```bash\nls\n```\n\n끝났다.')
     expect(cleanAnswer('번역: 고쳤다.')).toBe('고쳤다.')
-    expect(cleanAnswer('번역:\n아 고쳣어')).toBe('아 고쳣어')
-    expect(cleanAnswer('Translation:\r\n\n아 고쳣어\n')).toBe('아 고쳣어')
+    expect(cleanAnswer('번역:\n아 고쳤어')).toBe('아 고쳤어')
+    expect(cleanAnswer('Translation:\r\n\n아 고쳤어\n')).toBe('아 고쳤어')
     expect(cleanAnswer('번역:')).toBe('')
-    expect(cleanAnswer('<원문>\n다 됏어\n</원문>')).toBe('다 됏어')
+    expect(cleanAnswer('<원문>\n다 됐어\n</원문>')).toBe('다 됐어')
     // 코드처럼 보이는 머리말은 건드리지 않는다
-    for (const same of ['    Translation: string;', 'Translation: string;', '번역: string;', '```ts\nTranslation: string;\n```', '번역:아 고쳣어']) {
+    for (const same of ['    Translation: string;', 'Translation: string;', '번역: string;', '```ts\nTranslation: string;\n```', '번역:아 고쳤어']) {
       expect(cleanAnswer(same)).toBe(same)
     }
   })
@@ -136,7 +137,7 @@ describe('순수 함수', () => {
   })
 
   test('displayText: 완료면 번역, 대기면 원문+표시, 실패·없음이면 원문(undefined)', () => {
-    expect(displayText('Fixed it.', { status: 'done', ko: '고쳣어.' })).toBe('고쳣어.')
+    expect(displayText('Fixed it.', { status: 'done', ko: '고쳤어.' })).toBe('고쳤어.')
     expect(displayText('Fixed it.  ', { status: 'pending' })).toBe(`Fixed it.\n\n${PENDING_ANSWER}`)
     expect(displayText('Fixed it.', { status: 'pending', retry: true })).toBe(`Fixed it.\n\n${PENDING_ANSWER_RETRY}`)
     expect(displayText('Fixed it.', { status: 'failed' })).toBe(undefined)
@@ -517,7 +518,8 @@ describe('프롬프트·표시', () => {
     const thinking = buildSystemPrompt('thinking')
     const answer = buildSystemPrompt('answer')
     for (const p of [thinking, answer]) {
-      expect(p).toContain('했어→햇어')
+      expect(p).toContain('맞춤법은 표준대로')
+      expect(p.includes('햇어→') || p.includes('→햇어')).toBe(false)
       expect(p).toContain('<원문>')
     }
     expect(thinking).toContain('속으로 하는 생각(영어)을 한국어 혼잣말로')
@@ -557,5 +559,21 @@ describe('생각 문단 나누기', () => {
   test('tailLines: 마지막 줄들만', () => {
     expect(tailLines('a\nb\nc', 5)).toEqual({ text: 'a\nb\nc', cut: false })
     expect(tailLines('a\nb\nc', 2)).toEqual({ text: 'b\nc', cut: true })
+  })
+})
+
+describe('restoreInlineCode', () => {
+  test('원문의 인라인 코드가 번역문에 백틱 없이 있으면 백틱만 다시 씌운다', () => {
+    const src = 'I fixed the bug in `src/parser.ts`: the regex did not accept `Z`. Run `npm test`.'
+    expect(restoreInlineCode(src, 'src/parser.ts에서 버그 고쳤어. `Z`를 안 받았어. `npm test` 돌려 봐.')).toBe(
+      '`src/parser.ts`에서 버그 고쳤어. `Z`를 안 받았어. `npm test` 돌려 봐.',
+    )
+  })
+
+  test('이미 감싼 것, 코드 블록 안, 다른 낱말의 일부는 건드리지 않는다', () => {
+    const src = 'Use `x` and `a.ts`.'
+    expect(restoreInlineCode(src, '`x`랑 `a.ts` 써.')).toBe('`x`랑 `a.ts` 써.')
+    expect(restoreInlineCode(src, '```\na.ts\n```\nbox 써.')).toBe('```\na.ts\n```\nbox 써.')
+    expect(restoreInlineCode('`x`', 'xx 그리고 max')).toBe('xx 그리고 max')
   })
 })
