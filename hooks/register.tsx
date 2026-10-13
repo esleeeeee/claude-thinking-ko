@@ -11,12 +11,14 @@
 //
 // Thinking: there is no render site for thinking blocks, so the original thinking row stays as
 // it is. The thinking text is read from the response stream (`turn.step` thinking chunks) while
-// it streams; each paragraph is translated as soon as it is complete, and the band above the
-// prompt shows the current turn's thinking in Korean as it comes in. The `/thinking-ko` pane
-// lists recent thoughts; the `thinking_in_reply` option also draws them as a quote above the
-// reply that follows. Claude Code only receives thinking text when thinking summaries are on
-// (the desktop app does by default; the terminal needs `"showThinkingSummaries": true`);
-// when a thinking block arrives empty, the band says so and offers to turn them on.
+// it streams, and each paragraph is translated as soon as it is complete. In the transcript, the
+// turn's thoughts not yet followed by reply text are drawn above the engine's own progress row
+// (`Spinner`, wrapped, not replaced) as they come in; once reply text follows them, they are
+// drawn at the top of that reply block instead (`thinking_in_reply`, on by default). A fold
+// button keeps only the latest line. The `/thinking-ko` pane lists recent thoughts. Claude Code
+// only receives thinking text when thinking summaries are on (the desktop app does by default;
+// the terminal needs `"showThinkingSummaries": true`); when a thinking block arrives empty, the
+// band above the prompt says so and offers to turn them on.
 import type { HttpInit, HttpResponse, Register } from 'claude-code'
 
 import {
@@ -25,7 +27,6 @@ import {
   displayText,
   PENDING_THINKING,
   PENDING_THINKING_RETRY,
-  quoteBlock,
   redact,
   sameTextKey,
   shortHash,
@@ -49,8 +50,8 @@ export const MAX_CACHE_ENTRIES = 100
 export const MAX_CACHED_CHARS = 8000
 /** Thoughts kept for the pane. */
 export const MAX_THOUGHTS = 20
-/** Lines of the current turn's thinking the band shows at most (the latest ones). */
-export const BAND_MAX_LINES = 14
+/** Lines of live thinking drawn above the progress row at most (the latest ones). */
+export const LIVE_MAX_LINES = 20
 /** Thinking paragraphs that may wait for translation before the oldest is shown untranslated. */
 const THINKING_MAX_PENDING = 24
 /** Reply blocks remembered with the thoughts that came before them. */
@@ -125,7 +126,7 @@ type Thought = {
 type InlineThought = Thought | { ko: string }
 
 /** A reply block of this run and the thoughts that came before it in its turn. */
-type Attached = { text: string; isOpen: boolean; thoughts: Thought[]; requestId?: string }
+type Attached = { turnId: string; text: string; isOpen: boolean; thoughts: Thought[]; requestId?: string }
 
 function optionText(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
@@ -135,7 +136,7 @@ export const register: Register = (on, options) => {
   const geminiKey = optionText(options.gemini_api_key)
   const geminiModel = optionText(options.gemini_model) || DEFAULT_GEMINI_MODEL
   const claudeModel = optionText(options.claude_model) || DEFAULT_CLAUDE_MODEL
-  const thinkingInReply = options.thinking_in_reply === true
+  const thinkingInReply = options.thinking_in_reply !== false
   const backend = geminiKey ? `gemini:${geminiModel}` : `claude:${claudeModel}`
 
   /** The engine calls background work makes (see Io). */
@@ -340,12 +341,28 @@ export const register: Register = (on, options) => {
   const settled = (t: InlineThought): boolean =>
     'ko' in t || (!t.live && t.segments.every(seg => thinker.get(seg.id)?.status !== 'pending'))
 
-  /** The quote drawn above a reply for its thoughts; '' when there is none to show. */
-  const quoteOf = (list: readonly InlineThought[]): string =>
-    list
+  /**
+   * The thoughts as markdown to draw: all of them, the latest `maxLines` lines at most; folded,
+   * only the latest line. '' when there is none to show.
+   */
+  const thoughtsText = (list: readonly InlineThought[], maxLines = Number.POSITIVE_INFINITY): { text: string; cut: boolean } => {
+    const markdown = list
       .filter(t => !('gone' in t && t.gone))
-      .map(t => quoteBlock(markdownOf(t) || `_${STREAMING_THINKING}_`, '✻ '))
-      .join('\n>\n')
+      .map(t => markdownOf(t) || `_${STREAMING_THINKING}_`)
+      .join('\n\n')
+    if (!markdown) return { text: '', cut: false }
+    if (collapsed) {
+      const latest = markdown.split('\n').filter(l => l.trim()).at(-1) ?? ''
+      return { text: latest, cut: true }
+    }
+    return Number.isFinite(maxLines) ? tailLines(markdown, maxLines) : { text: markdown, cut: false }
+  }
+
+  const toggleFold = (): void => {
+    collapsed = !collapsed
+    void io?.storeSet(COLLAPSED_KEY, collapsed).catch(() => {})
+    redraw()
+  }
 
   /**
    * The thoughts above the reply block `requestId`: the ones that came before it in its turn,
@@ -362,7 +379,7 @@ export const register: Register = (on, options) => {
     for (const a of attached) {
       if (a.requestId !== undefined) continue
       const text = sameTextKey(a.text)
-      if (!a.isOpen && text === key) {
+      if (!a.isOpen && (text === key || (key.length >= 20 && (text.startsWith(key) || key.startsWith(text))))) {
         a.requestId = requestId
         aboveReply.set(requestId, a.thoughts)
         return a.thoughts
@@ -513,7 +530,7 @@ export const register: Register = (on, options) => {
             endReply()
             const before = unplaced.get(e.turnId) ?? []
             if (chunk.kind === 'text' && before.length > 0) {
-              const at: Attached = { text: chunk.text, isOpen: true, thoughts: before.splice(0) }
+              const at: Attached = { turnId: e.turnId, text: chunk.text, isOpen: true, thoughts: before.splice(0) }
               attached.push(at)
               if (attached.length > MAX_ATTACHED) attached.splice(0, attached.length - MAX_ATTACHED)
               reply = { index: chunk.index, at }
@@ -565,8 +582,19 @@ export const register: Register = (on, options) => {
     return await stream.result
   })
 
+  // Thoughts the turn ended with and no reply text followed: drawn above the turn's last reply.
+  on('turn.complete', async ($, e, next) => {
+    const left = (unplaced.get(e.turnId) ?? []).filter(t => !t.gone)
+    unplaced.delete(e.turnId)
+    const last = [...attached].reverse().find(a => a.turnId === e.turnId)
+    if (last && left.length > 0) {
+      last.thoughts.push(...left)
+      redraw()
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (e.props.isSummary) return next(e)
     const source = trimBlankLines(e.props.text)
     if (!source.trim()) return next(e)
     const id = answerId(e.requestId, source)
@@ -583,84 +611,78 @@ export const register: Register = (on, options) => {
       if (!history.has(e.requestId) && !tracker.isGenerating(source)) answers.enqueue(id, source)
     }
 
-    let quote = ''
-    if (thinkingInReply) {
-      const above = await thoughtsAbove(key => $.store.get(key), e.requestId, source)
-      if (above && aboveReply.has(e.requestId)) cacheThoughts(e.requestId, source, above)
-      quote = above ? quoteOf(above) : ''
-    }
     const body = displayText(source, answers.get(id)) ?? source
-    if (!quote && body === source) return next(e)
-    return next({ ...e, props: { ...e.props, text: quote ? `${quote}\n\n${body}` : body } })
-  })
-
-  // The band above the prompt: the current turn's thinking in Korean as it comes in; or, when
-  // thinking arrives without text, a button that turns thinking summaries on.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    const reply = body === source ? next(e) : next({ ...e, props: { ...e.props, text: body } })
+    if (!thinkingInReply) return reply
+    const above = await thoughtsAbove(key => $.store.get(key), e.requestId, source)
+    if (above && aboveReply.has(e.requestId)) cacheThoughts(e.requestId, source, above)
+    const shown = above ? thoughtsText(above) : { text: '', cut: false }
+    if (!shown.text) return reply
+    // The reply's thoughts on top, then the engine's own drawing of the reply.
     const { Box, Button, Markdown, Text } = $.ui.resolve(e)
-    const current = thoughts.filter(t => t.turnId === currentTurn && !t.gone)
-    if (current.length === 0) {
-      if (summariesWritten) {
-        return (
-          <Box flexDirection="column">
-            <Text dimColor>✻ {RESTART_HINT}</Text>
-          </Box>
-        )
-      }
-      if (!omitted) return next(e)
-      return (
-        <Box flexDirection="column">
-          <Text dimColor>✻ thinking-ko · {OMITTED_HINT}</Text>
-          <Button
-            key="enable-summaries"
-            label="생각 요약 켜기"
-            onPress={() => {
-              void turnOnSummaries().then(
-                msg => $.ui.toast(msg),
-                () => $.ui.toast('설정 파일을 못 고쳤어. settings.json에 "showThinkingSummaries": true를 직접 넣어 줘.'),
-              )
-            }}
-          />
-        </Box>
-      )
-    }
-    const markdown = current.map(markdownOf).filter(Boolean).join('\n\n')
-    const toggle = (
-      <Button
-        key="fold"
-        label={collapsed ? '펼치기' : '접기'}
-        onPress={() => {
-          collapsed = !collapsed
-          void io?.storeSet(COLLAPSED_KEY, collapsed).catch(() => {})
-          redraw()
-        }}
-      />
-    )
-    if (collapsed) {
-      const latest = markdown.split('\n').filter(l => l.trim()).at(-1) ?? ''
-      return (
-        <Box flexDirection="row">
-          <Box flexGrow={1}>
-            <Text dimColor wrap="truncate-end">
-              ✻ 생각 · {latest.replace(/^[>*_#\s-]+/, '')}
-            </Text>
-          </Box>
-          {toggle}
-        </Box>
-      )
-    }
-    const room = Math.max(3, Math.min(BAND_MAX_LINES, e.props.maxRows - 2))
-    const shown = tailLines(markdown, room)
     return (
       <Box flexDirection="column">
         <Box flexDirection="row">
           <Box flexGrow={1}>
-            <Text dimColor>✻ 생각{shown.cut ? ` · 앞부분은 /${COMMAND}` : ''}</Text>
+            <Text dimColor>✻ 생각</Text>
           </Box>
-          {toggle}
+          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
+        </Box>
+        <Markdown text={shown.text} dimColor />
+        {await reply}
+      </Box>
+    )
+  })
+
+  // The engine's progress row while a turn runs, with the turn's thoughts that no reply text has
+  // followed yet drawn above it in Korean as they come in.
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    const pending = (currentTurn === undefined ? [] : (unplaced.get(currentTurn) ?? [])).filter(t => !t.gone)
+    if (pending.length === 0) return next(e)
+    const shown = thoughtsText(pending, LIVE_MAX_LINES)
+    if (!shown.text) return next(e)
+    const row = await next(e)
+    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row">
+          <Box flexGrow={1}>
+            <Text dimColor>✻ 생각{shown.cut && !collapsed ? ` · 앞부분은 /${COMMAND}` : ''}</Text>
+          </Box>
+          <Button key="fold" label={collapsed ? '펼치기' : '접기'} onPress={toggleFold} />
         </Box>
         <Markdown text={shown.text} />
+        {row}
+      </Box>
+    )
+  })
+
+  // The band above the prompt: only when thinking arrives without text, a note and a button that
+  // turns thinking summaries on.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    if (summariesWritten) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>✻ {RESTART_HINT}</Text>
+        </Box>
+      )
+    }
+    if (!omitted) return next(e)
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>✻ thinking-ko · {OMITTED_HINT}</Text>
+        <Button
+          key="enable-summaries"
+          label="생각 요약 켜기"
+          onPress={() => {
+            void turnOnSummaries().then(
+              msg => $.ui.toast(msg),
+              () => $.ui.toast('설정 파일을 못 고쳤어. settings.json에 "showThinkingSummaries": true를 직접 넣어 줘.'),
+            )
+          }}
+        />
       </Box>
     )
   })

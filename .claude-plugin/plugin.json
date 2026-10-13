@@ -1,7 +1,7 @@
 {
   "name": "thinking-ko",
-  "version": "2.5.0",
-  "description": "Shows Claude's thinking (live, above the prompt) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
+  "version": "2.6.0",
+  "description": "Shows Claude's thinking (live in the transcript, then above the reply it led to) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
   "author": {
     "name": "esleeeeee"
   },
@@ -38,8 +38,8 @@
     "thinking_in_reply": {
       "type": "boolean",
       "title": "Thinking above replies",
-      "description": "Also draw the translated thinking as a quote at the top of the reply that follows it.",
-      "default": false,
+      "description": "Draw the translated thinking at the top of the reply that follows it (on by default). Off: thinking shows only live above the progress row and in /thinking-ko.",
+      "default": true,
       "required": false
     }
   }
