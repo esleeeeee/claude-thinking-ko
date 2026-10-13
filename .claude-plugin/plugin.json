@@ -48,6 +48,13 @@
       "description": "When a thinking block ends, let what follows wait up to 3 seconds for that thought's translation, so the Korean thought shows before the reply. Off: no waiting; the thought may appear just after the reply starts.",
       "default": true,
       "required": false
+    },
+    "auto_thinking_summaries": {
+      "type": "boolean",
+      "title": "Turn on thinking summaries",
+      "description": "Thinking text reaches Claude Code only with thinking summaries on. When no settings file says anything about them, add \"showThinkingSummaries\": true to ~/.claude/settings.json once (with a backup). A value you set yourself, false included, is never changed.",
+      "default": true,
+      "required": false
     }
   }
 }

@@ -6,7 +6,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
 
 import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
-import { FAILED_MARK, OMITTED_HINT, RESTART_HINT } from '../hooks/register'
+import { AUTO_SUMMARIES_NOTE, FAILED_MARK, OMITTED_HINT, RESTART_HINT, SUMMARIES_ON_HINT } from '../hooks/register'
 
 const PLUGIN = 'thinking-ko'
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -23,6 +23,7 @@ type World = {
   fetches: Array<{ url: string; init?: HttpInit }>
   writes: Array<{ path: string; text: string }>
   store: Map<string, unknown>
+  toasts: string[]
   appended: () => readonly unknown[]
 }
 
@@ -42,7 +43,7 @@ function world(on: On, opts: WorldOptions = {}): World {
   mock.env(on, { HOME: '/home/tester' })
   const session = mock.session(on)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
-  const w: World = { clock, calls: [], fetches: [], writes: [], store, appended: () => session.appended() }
+  const w: World = { clock, calls: [], fetches: [], writes: [], store, toasts: [], appended: () => session.appended() }
   // $.store를 메모리로 대신한다(테스트에서 들여다보려고 mock.store 대신 직접 둔다).
   on('store.get', ($, e) => ({ value: structuredClone(store.get(e.key)) }))
   on('store.set', ($, e) => {
@@ -73,6 +74,10 @@ function world(on: On, opts: WorldOptions = {}): World {
     return { value: { status, ok: status >= 200 && status < 300, headers: {}, text } }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.render', { component: 'AssistantMessage' }, ($, e): RenderElement => ({
     type: 'Text',
@@ -711,9 +716,11 @@ test('설정에 생각 요약이 없어도 생각이 실제로 들어오면(앱 
   expect(await textOf(spinner)).toContain('번역 Real thought.')
 })
 
-test('생각이 텍스트 없이 오면 띠에 안내와 [생각 요약 켜기]: 누르면 백업 후 settings.json에 그 한 줄만 더한다', async ($, on) => {
+const NO_AUTO = { options: { auto_thinking_summaries: false } }
+
+test('생각이 텍스트 없이 오면 띠에 안내와 [생각 요약 켜기]: 누르면 백업 후 settings.json에 그 한 줄만 더한다', NO_AUTO, async ($, on) => {
   const before = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "thinking-ko@claude-thinking-ko": true\n  }\n}\n'
-  const w = await emptyThinking($, on, { files: { [SETTINGS]: before } })
+  const w = await emptyThinking($, on, { settings: {}, files: { [SETTINGS]: before } })
   const band = await $.ui.mount(BAND)
   expect(await textOf(band)).toContain(OMITTED_HINT)
   const m = await mountReply($, 'msg-1', 'Answer.')
@@ -730,8 +737,8 @@ test('생각이 텍스트 없이 오면 띠에 안내와 [생각 요약 켜기]:
   expect(await textOf(band)).toContain(RESTART_HINT)
 })
 
-test('settings.json이 JSON으로 안 읽히면 건드리지 않는다', async ($, on) => {
-  const w = await emptyThinking($, on, { files: { [SETTINGS]: '{ "model": "opus", // comment\n}' } })
+test('settings.json이 JSON으로 안 읽히면 건드리지 않는다', NO_AUTO, async ($, on) => {
+  const w = await emptyThinking($, on, { settings: {}, files: { [SETTINGS]: '{ "model": "opus", // comment\n}' } })
   const band = await $.ui.mount(BAND)
   await band.press({ key: 'enable-summaries' })
   expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
@@ -742,4 +749,49 @@ test('생각 요약이 이미 켜져 있고 아직 생각이 없으면 띠는 �
   await start($)
   const band = await $.ui.mount(BAND)
   expect(await textOf(band)).toBe('')
+})
+
+test('생각이 비어서 오는데 설정은 이미 켜져 있으면, 버튼 대신 다시 켜라고만 알린다', async ($, on) => {
+  await emptyThinking($, on, {})
+  const band = await $.ui.mount(BAND)
+  const shown = await textOf(band)
+  expect(shown).toContain(SUMMARIES_ON_HINT)
+  expect(await band.find({ key: 'enable-summaries' })).toBe(undefined)
+})
+
+test('자동 켜기: 어느 설정에도 값이 없으면 시작할 때 settings.json을 백업하고 그 한 줄만 더한 뒤 한 번 알린다', async ($, on) => {
+  const before = '{\n  "model": "opus"\n}\n'
+  const w = world(on, { settings: { model: 'opus' }, files: { [SETTINGS]: before } })
+  await start($)
+  expect(w.writes.find(x => x.path === `${SETTINGS}.thinking-ko.bak`)?.text).toBe(before)
+  expect(JSON.parse(w.writes.find(x => x.path === SETTINGS)?.text ?? '{}')).toEqual({ model: 'opus', showThinkingSummaries: true })
+  expect(w.toasts).toEqual([AUTO_SUMMARIES_NOTE])
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toBe('') // 버튼으로 켠 게 아니니 재시작 안내를 띠에 붙여 두지 않는다
+})
+
+test('자동 켜기: settings.json이 없으면 그 한 줄짜리로 만든다', async ($, on) => {
+  const w = world(on, { settings: {} })
+  await start($)
+  expect(w.writes.filter(x => x.path.startsWith(SETTINGS)).map(x => x.path)).toEqual([SETTINGS])
+  expect(JSON.parse(w.writes[0]?.text ?? '{}')).toEqual({ showThinkingSummaries: true })
+})
+
+test('자동 켜기: 사람이 정한 값(false 포함)은 건드리지 않고, 옵션으로 끌 수도 있다', async ($, on) => {
+  const w = world(on, { settings: { showThinkingSummaries: false }, files: { [SETTINGS]: '{ "showThinkingSummaries": false }' } })
+  await start($)
+  expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
+  expect(w.toasts).toEqual([])
+})
+
+test('자동 켜기: 병합 설정엔 없어도 사용자 파일에 키가 있으면(다른 곳에서 덮였을 때) 건드리지 않는다', async ($, on) => {
+  const w = world(on, { settings: {}, files: { [SETTINGS]: '{ "showThinkingSummaries": false }' } })
+  await start($)
+  expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
+})
+
+test('자동 켜기 옵션을 끄면 아무것도 쓰지 않는다', NO_AUTO, async ($, on) => {
+  const w = world(on, { settings: {} })
+  await start($)
+  expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
 })
