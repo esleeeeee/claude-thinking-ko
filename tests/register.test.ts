@@ -6,7 +6,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
 
 import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
-import { OMITTED_HINT } from '../hooks/register'
+import { OMITTED_HINT, RESTART_HINT } from '../hooks/register'
 
 const PLUGIN = 'thinking-ko'
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -27,7 +27,17 @@ type World = {
 }
 
 /** 엔진 밑바닥을 흉내 낸다. 렌더 자리의 맨 밑 훅은 받은 글을 Text 하나로 그린다. */
-function world(on: On, opts: { reply?: Reply; store?: Record<string, unknown>; fetch?: (url: string) => { status?: number; text: string } } = {}): World {
+type WorldOptions = {
+  reply?: Reply
+  store?: Record<string, unknown>
+  fetch?: (url: string) => { status?: number; text: string }
+  /** 사용자 설정(병합본). 기본은 생각 요약이 켜진 상태. */
+  settings?: Record<string, unknown>
+  /** 읽을 수 있는 파일들 */
+  files?: Record<string, string>
+}
+
+function world(on: On, opts: WorldOptions = {}): World {
   const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/tester' })
   const session = mock.session(on)
@@ -47,7 +57,8 @@ function world(on: On, opts: { reply?: Reply; store?: Record<string, unknown>; f
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('fs.read', () => ({ deny: 'no such file' }))
+  on('fs.read', ($, e) => (opts.files && e.path in opts.files ? { value: opts.files[e.path]! } : { deny: 'no such file' }))
+  on('settings.read', () => ({ value: opts.settings ?? { showThinkingSummaries: true } }))
   on('fs.write', ($, e) => {
     w.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
@@ -454,4 +465,39 @@ test('생각: 번역이 끝내 실패하면 띠에 원문을 흐리게 보여 �
   const shown = await textOf(band)
   expect(shown).toContain('번역 실패, 원문')
   expect(shown).toContain('Plain English thought.')
+})
+
+const SETTINGS = '/home/tester/.claude/settings.json'
+
+test('생각 요약이 꺼져 있으면 띠에 켜기 버튼: 누르면 백업 후 settings.json에 그 한 줄만 더한다', async ($, on) => {
+  const before = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "thinking-ko@claude-thinking-ko": true\n  }\n}\n'
+  const w = world(on, { settings: { model: 'opus' }, files: { [SETTINGS]: before } })
+  await start($)
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toContain(OMITTED_HINT)
+  await band.press({ key: 'enable-summaries' })
+  const backup = w.writes.find(x => x.path === `${SETTINGS}.thinking-ko.bak`)
+  const written = w.writes.find(x => x.path === SETTINGS)
+  expect(backup?.text).toBe(before)
+  expect(JSON.parse(written?.text ?? '{}')).toEqual({
+    model: 'opus',
+    enabledPlugins: { 'thinking-ko@claude-thinking-ko': true },
+    showThinkingSummaries: true,
+  })
+  expect(await textOf(band)).toContain(RESTART_HINT)
+})
+
+test('settings.json이 JSON으로 안 읽히면 건드리지 않는다', async ($, on) => {
+  const w = world(on, { settings: {}, files: { [SETTINGS]: '{ "model": "opus", // comment\n}' } })
+  await start($)
+  const band = await $.ui.mount(BAND)
+  await band.press({ key: 'enable-summaries' })
+  expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
+})
+
+test('생각 요약이 이미 켜져 있고 아직 생각이 없으면 띠는 비어 있다', async ($, on) => {
+  world(on)
+  await start($)
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toBe('')
 })

@@ -48,9 +48,10 @@ export const MAX_THOUGHTS = 20
 export const BAND_MAX_LINES = 10
 export const PANE_ID = 'thinking-ko'
 export const COMMAND = 'thinking-ko'
-/** Shown when thinking blocks arrive without their text. */
-export const OMITTED_HINT =
-  '생각 원문이 안 와서 못 옮겨. ~/.claude/settings.json에 "showThinkingSummaries": true 넣고 Claude Code를 다시 켜.'
+/** Shown while Claude Code does not receive thinking text (thinking summaries off). */
+export const OMITTED_HINT = '생각 요약이 꺼져 잇어서 생각을 못 옮겨. 아래 버튼 누르면 켜줄게.'
+/** Shown once the setting was written: it takes effect on the next start. */
+export const RESTART_HINT = '생각 요약 켯어. Claude Code(앱)를 완전히 껏다 켜면 생각이 번역돼.'
 const CACHE_PREFIX = 't:'
 const CACHE_INDEX = 'cache-index'
 const LOG_MAX_LINES = 500
@@ -109,6 +110,8 @@ export const register: Register = (on, options) => {
   const thoughts: Thought[] = []
   /** A thinking block arrived without text (thinking summaries off). */
   let omitted = false
+  /** This module wrote showThinkingSummaries to the user's settings (takes effect on restart). */
+  let summariesWritten = false
 
   const need = (): Io => {
     if (!io) throw new Error('no engine handle yet')
@@ -253,6 +256,36 @@ export const register: Register = (on, options) => {
     thinker.enqueue(live.id, source)
   }
 
+  /**
+   * Turns thinking summaries on when the person presses the band's button: adds
+   * `"showThinkingSummaries": true` to the user settings file, after saving a backup beside it.
+   * A file that does not parse as a JSON object is left alone. Answers a line to show.
+   */
+  const turnOnSummaries = async (): Promise<string> => {
+    const x = need()
+    const home = await x.home()
+    if (!home) return '홈 폴더를 못 찾아서 못 켯어. settings.json에 "showThinkingSummaries": true를 직접 넣어줘.'
+    const path = `${home.replace(/[\\/]+$/, '')}/.claude/settings.json`
+    const text = await x.read(path).catch(() => '')
+    let settings: Record<string, unknown> = {}
+    if (text.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(text)
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('not an object')
+        settings = parsed as Record<string, unknown>
+      } catch {
+        log('settings not changed: settings.json does not parse')
+        return 'settings.json을 못 읽어서 안 건드렷어. 거기에 "showThinkingSummaries": true를 직접 넣어줘.'
+      }
+      await x.write(`${path}.thinking-ko.bak`, text)
+    }
+    await x.write(path, `${JSON.stringify({ ...settings, showThinkingSummaries: true }, null, 2)}\n`)
+    summariesWritten = true
+    log('settings showThinkingSummaries=true written')
+    redraw()
+    return RESTART_HINT
+  }
+
   // ---- hooks ----
   on('session.start', async ($, e, next) => {
     io = {
@@ -374,15 +407,35 @@ export const register: Register = (on, options) => {
     return text === undefined ? next(e) : next({ ...e, props: { ...e.props, text } })
   })
 
-  // The band above the prompt: the latest thought, translated.
+  // The band above the prompt: the latest thought, translated; or, while Claude Code receives no
+  // thinking text, a button that turns thinking summaries on.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
     const last = thoughts.at(-1)
-    if (e.props.hasSurvey || (!last && !omitted)) return next(e)
-    const { Box, Markdown, Text } = $.ui.resolve(e)
+    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
     if (!last) {
+      if (summariesWritten) {
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>✻ {RESTART_HINT}</Text>
+          </Box>
+        )
+      }
+      const merged = await $.settings.read().catch(() => ({}) as Record<string, unknown>)
+      if (!omitted && merged.showThinkingSummaries === true) return next(e)
       return (
         <Box flexDirection="column">
-          <Text dimColor>✻ 생각 · {OMITTED_HINT}</Text>
+          <Text dimColor>✻ thinking-ko · {OMITTED_HINT}</Text>
+          <Button
+            key="enable-summaries"
+            label="생각 요약 켜기"
+            onPress={() => {
+              void turnOnSummaries().then(
+                msg => $.ui.toast(msg),
+                () => $.ui.toast('설정 파일을 못 고쳣어. settings.json에 "showThinkingSummaries": true를 직접 넣어줘.'),
+              )
+            }}
+          />
         </Box>
       )
     }
@@ -416,7 +469,7 @@ export const register: Register = (on, options) => {
     if (thoughts.length === 0) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>{omitted ? OMITTED_HINT : '아직 옮긴 생각이 없어.'}</Text>
+          <Text dimColor>{summariesWritten ? RESTART_HINT : omitted ? OMITTED_HINT : '아직 옮긴 생각이 없어.'}</Text>
         </Box>
       )
     }
