@@ -754,6 +754,55 @@ export function quoteBlock(text: string, head: string): string {
   return [`> ${head}${lines[0] ?? ''}`, ...lines.slice(1).map(l => (l ? `> ${l}` : '>'))].join('\n')
 }
 
+/** 문단 경계 없이 이만큼 길어진 생각은 마지막 문장 끝에서 끊어 먼저 옮긴다. */
+export const MAX_PARAGRAPH_CHARS = 600
+
+/**
+ * 스트리밍 중인 생각 글에서 `from` 이후로 끝난 문단들을 떼어 낸다(빈 줄이 경계). 코드 펜스 안의
+ * 빈 줄에서는 끊지 않고, 문단이 MAX_PARAGRAPH_CHARS를 넘으면 마지막 문장 끝에서 끊는다.
+ * `final`이면 남은 글도 모두 내보낸다. 다음에 읽기 시작할 위치를 `next`로 돌려준다.
+ */
+export function takeParagraphs(text: string, from: number, final: boolean): { parts: string[]; next: number } {
+  const parts: string[] = []
+  let at = from
+  const push = (p: string): void => {
+    const t = trimBlankLines(p)
+    if (t.trim()) parts.push(t)
+  }
+  for (;;) {
+    const rest = text.slice(at)
+    const boundary = /\n[ \t]*\n/g
+    let cut: { end: number; next: number } | undefined
+    for (let m = boundary.exec(rest); m; m = boundary.exec(rest)) {
+      const fences = (rest.slice(0, m.index).match(/^[ \t]*(```|~~~)/gm) ?? []).length
+      if (fences % 2 === 0) {
+        cut = { end: m.index, next: m.index + m[0].length }
+        break
+      }
+    }
+    if (!cut && rest.length > MAX_PARAGRAPH_CHARS && !/^[ \t]*(```|~~~)/m.test(rest)) {
+      const head = rest.slice(0, MAX_PARAGRAPH_CHARS)
+      const end = Math.max(head.lastIndexOf('. '), head.lastIndexOf('? '), head.lastIndexOf('! '))
+      if (end > 100) cut = { end: end + 1, next: end + 2 }
+    }
+    if (!cut) break
+    push(rest.slice(0, cut.end))
+    at += cut.next
+  }
+  if (final) {
+    push(text.slice(at))
+    at = text.length
+  }
+  return { parts, next: at }
+}
+
+/** 글의 마지막 maxLines줄만 남긴다. 잘렸으면 cut이 true. */
+export function tailLines(text: string, maxLines: number): { text: string; cut: boolean } {
+  const lines = text.split('\n')
+  if (lines.length <= maxLines) return { text, cut: false }
+  return { text: lines.slice(-Math.max(1, maxLines)).join('\n'), cut: true }
+}
+
 /** 화면 글과 스트림 글을 맞춰 보려고 공백을 하나로 접는다. */
 export function sameTextKey(text: string): string {
   return text.replace(/\s+/g, ' ').trim()

@@ -6,7 +6,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
 
 import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
-import { OMITTED_HINT, RESTART_HINT } from '../hooks/register'
+import { FAILED_MARK, OMITTED_HINT, RESTART_HINT } from '../hooks/register'
 
 const PLUGIN = 'thinking-ko'
 const USAGE = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -374,21 +374,22 @@ function readAll($: Engine, agentId?: string, index = 0): Promise<void> {
 
 const isThinking = (system: string): boolean => system.includes('속으로 하는 생각(영어)을')
 
-test('생각: 스트림에서 읽어 번역하고 뒤따르는 답변 맨 위에 인용문으로 붙인다, 띠는 진행 상태만', async ($, on) => {
+test('생각: 문단이 끝날 때마다 바로 번역해서, 생각이 끝나기 전에도 입력창 위 띠에 한국어로 쌓인다', async ($, on) => {
   let release!: () => void
   const gate = new Promise<void>(resolve => {
     release = resolve
   })
   const w = world(on, {
-    reply: async (p, system) => {
+    reply: async p => {
       await w.clock.sleep(1000)
-      return answered(isThinking(system) ? '**파일 확인**\n\n파일부터 읽어야겟어.' : '다 됏어.')
+      return answered(sourceOf(p).startsWith('**Checking') ? '**파일 확인**\n\n파일부터 읽어야겠어.' : '그다음 테스트 돌려 볼게.')
     },
   })
   stepWith(on, [
     { kind: 'thinking', index: 0, text: '**Checking the file**\n\nI should read' },
-    { kind: 'thinking', index: 0, text: ' the file first.' },
-    gate,
+    { kind: 'thinking', index: 0, text: ' the file first.\n\nThen I will run' },
+    gate, // 생각이 아직 이어지는 중
+    { kind: 'thinking', index: 0, text: ' the tests.' },
     { kind: 'text', index: 1, text: 'Done.' },
   ])
   await start($)
@@ -397,21 +398,25 @@ test('생각: 스트림에서 읽어 번역하고 뒤따르는 답변 맨 위에
   expect(await textOf(band)).toBe('') // 아직 생각이 없으면 띠는 비어 있다
   const reading = readAll($)
   await w.clock.settle()
-  expect(await textOf(band)).toContain(STREAMING_THINKING)
-  expect(w.calls.length).toBe(0)
+  // 끝난 문단(제목 + 첫 문단)은 생각이 끝나기 전에 이미 번역 요청이 나갔다
+  expect(w.calls.map(c => sourceOf(c.prompt))).toEqual(['**Checking the file**', 'I should read the file first.'])
+  expect(isThinking(w.calls[0]!.system ?? '')).toBe(true)
+  expect(await textOf(band)).toContain(PENDING_THINKING)
+  await w.clock.advance(1000)
+  const mid = await textOf(band)
+  expect(mid).toContain('파일부터 읽어야겠어.') // 생각 도중에 한국어가 보인다
+  expect(mid).toContain(STREAMING_THINKING) // 나머지는 아직 생각 중
+  expect(mid.includes('I should read')).toBe(false)
   release()
   await reading
   await w.clock.settle()
-  expect(await textOf(band)).toContain(PENDING_THINKING)
-  expect(w.calls[0]!.prompt).toBe('<원문>\n**Checking the file**\n\nI should read the file first.\n</원문>')
-  expect(isThinking(w.calls[0]!.system ?? '')).toBe(true)
-
-  const m = await mountReply($, 'msg-1', 'Done.')
-  expect(await m.shown()).toBe(`> ✻ _${PENDING_THINKING}_\n\nDone.\n\n${PENDING_ANSWER}`)
+  expect(sourceOf(w.calls.at(-1)!.prompt)).toBe('Then I will run the tests.')
   await w.clock.advance(1000)
-  expect(await m.shown()).toBe('> ✻ **파일 확인**\n>\n> 파일부터 읽어야겟어.\n\n다 됏어.')
-  expect(await textOf(band)).toBe('') // 번역이 끝나면 띠는 비운다
-  expect(w.store.get('k:msg-1')).toEqual({ h: shortHash('Done.'), kos: ['**파일 확인**\n\n파일부터 읽어야겟어.'] })
+  expect(await textOf(band)).toContain('그다음 테스트 돌려 볼게.')
+  // 기본값에서는 답변 위에 붙이지 않는다
+  const m = await mountReply($, 'msg-1', 'Done.')
+  await w.clock.advance(1000)
+  expect(await m.shown()).toBe('그다음 테스트 돌려 볼게.') // (이 모킹은 답변에도 같은 글을 돌려준다)
   expect(w.appended()).toEqual([]) // 표시만 바꾼다
 
   // /thinking-ko 패널에 최근 생각이 쌓인다
@@ -424,43 +429,91 @@ test('생각: 스트림에서 읽어 번역하고 뒤따르는 답변 맨 위에
     requestId: 'thinking-ko',
     props: { title: '생각 번역', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
   })
-  expect(await textOf(pane)).toContain('파일부터 읽어야겟어.')
+  expect(await textOf(pane)).toContain('파일부터 읽어야겠어.')
 })
 
-test('생각: 도구 호출 앞의 생각은 같은 턴의 다음 답변 위에 붙는다', async ($, on) => {
-  const w = world(on, { reply: (p, system) => answered(isThinking(system) ? '파일 읽어볼게.' : '읽엇어.') })
-  stepWith(on, index =>
-    index === 0
-      ? [
-          { kind: 'thinking', index: 0, text: 'Let me read the file.' },
-          { kind: 'tool', index: 1, id: 'tu-1', name: 'Read' },
-        ]
-      : [{ kind: 'text', index: 0, text: 'I read it.' }],
-  )
-  await start($)
-  await turn($)
-  await readAll($, undefined, 0)
-  await readAll($, undefined, 1)
-  await w.clock.settle()
-  const m = await mountReply($, 'msg-2', 'I read it.')
-  expect(await m.shown()).toBe('> ✻ 파일 읽어볼게.\n\n읽엇어.')
-})
-
-test('생각: 텍스트 없이 온 생각 블록(생각 요약 꺼짐)은 번역하지 않고 설정 방법을 띠에 알린다', async ($, on) => {
-  const w = world(on)
-  stepWith(on, [
-    { kind: 'thinking', index: 0, text: '' },
-    { kind: 'text', index: 1, text: 'Answer.' },
-  ])
+test('생각 띠: [접기]를 누르면 마지막 한 줄만, [펼치기]로 다시 전부, 접은 상태는 저장한다', async ($, on) => {
+  const w = world(on, { reply: p => answered(`번역 ${sourceOf(p)}`) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'First idea.\n\nSecond idea.\n\nThird idea.' }])
   await start($)
   await turn($)
   await readAll($)
   await w.clock.settle()
   const band = await $.ui.mount(BAND)
-  expect(await textOf(band)).toContain(OMITTED_HINT)
-  const m = await mountReply($, 'msg-1', 'Answer.')
-  expect(await m.shown()).toBe('번역 Answer.') // 빈 생각은 답변 위에 안 붙는다
-  expect(w.calls.length).toBe(1)
+  expect(await textOf(band)).toContain('번역 First idea.')
+  await band.press({ key: 'fold' })
+  const folded = await textOf(band)
+  expect(folded).toContain('번역 Third idea.')
+  expect(folded.includes('First idea')).toBe(false)
+  expect((await band.find({ key: 'fold' }))?.props.label).toBe('펼치기')
+  await w.clock.settle()
+  expect(w.store.get('band-collapsed')).toBe(true)
+  await band.press({ key: 'fold' })
+  expect(await textOf(band)).toContain('번역 First idea.')
+})
+
+test('생각 띠: 접은 상태는 다음 세션에도 이어진다', async ($, on) => {
+  const w = world(on, { store: { 'band-collapsed': true }, reply: p => answered(`번역 ${sourceOf(p)}`) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Alpha.\n\nBeta.' }])
+  await start($)
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  const band = await $.ui.mount(BAND)
+  const shown = await textOf(band)
+  expect(shown).toContain('번역 Beta.')
+  expect(shown.includes('Alpha')).toBe(false)
+})
+
+test(
+  '생각: thinking_in_reply를 켜면 뒤따르는 답변 맨 위에도 인용문으로 붙인다(도구 호출 앞 생각은 다음 답변에)',
+  { options: { thinking_in_reply: true } },
+  async ($, on) => {
+    const w = world(on, { reply: (p, system) => answered(isThinking(system) ? '파일 읽어볼게.' : '읽었어.') })
+    stepWith(on, index =>
+      index === 0
+        ? [
+            { kind: 'thinking', index: 0, text: 'Let me read the file.' },
+            { kind: 'tool', index: 1, id: 'tu-1', name: 'Read' },
+          ]
+        : [{ kind: 'text', index: 0, text: 'I read it.' }],
+    )
+    await start($)
+    await turn($)
+    await readAll($, undefined, 0)
+    await readAll($, undefined, 1)
+    await w.clock.settle()
+    const m = await mountReply($, 'msg-2', 'I read it.')
+    expect(await m.shown()).toBe('> ✻ 파일 읽어볼게.\n\n읽었어.')
+    await w.clock.settle()
+    expect(w.store.get('k:msg-2')).toEqual({ h: shortHash('I read it.'), kos: ['파일 읽어볼게.'] })
+  },
+)
+
+test('생각: thinking_in_reply일 때 재개한 과거 답변은 캐시해 둔 생각 번역을 위에 붙인다(요청 없음)', { options: { thinking_in_reply: true } }, async ($, on) => {
+  const w = world(on, {
+    store: {
+      't:old-1': { h: shortHash('Old answer.'), ko: '옛 답변' },
+      'k:old-1': { h: shortHash('Old answer.'), kos: ['옛 생각'] },
+    },
+  })
+  await start($)
+  const m = await mountReply($, 'old-1', 'Old answer.')
+  expect(await m.shown()).toBe('> ✻ 옛 생각\n\n옛 답변')
+  await w.clock.settle()
+  expect(w.calls.length).toBe(0)
+})
+
+test('생각: 번역이 끝내 실패한 문단은 원문을 실패 표시와 함께 띠에 보여 준다', async ($, on) => {
+  const w = world(on, { reply: () => ({ isAnswered: false, reason: 'empty-reply', usage: USAGE }) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Plain English thought.' }])
+  await start($)
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  await w.clock.advance(60_000)
+  const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toContain(`${FAILED_MARK}_ Plain English thought.`)
 })
 
 test('생각: 서브에이전트의 생각은 올리지 않는다', async ($, on) => {
@@ -478,44 +531,42 @@ test('생각: 서브에이전트의 생각은 올리지 않는다', async ($, on
   expect(w.calls.length).toBe(0)
 })
 
-test('생각: 번역이 끝내 실패하면 답변 위에 원문을 실패 표시와 함께 붙인다', async ($, on) => {
-  const w = world(on, {
-    reply: (p, system) => (isThinking(system) ? { isAnswered: false, reason: 'empty-reply', usage: USAGE } : answered('답이야.')),
-  })
+const SETTINGS = '/home/tester/.claude/settings.json'
+
+/** 생각 요약이 꺼진 상태: 생각 블록이 텍스트 없이 온다. */
+async function emptyThinking($: Engine, on: On, opts: WorldOptions): Promise<World> {
+  const w = world(on, opts)
   stepWith(on, [
-    { kind: 'thinking', index: 0, text: 'Plain English thought.' },
+    { kind: 'thinking', index: 0, text: '' },
     { kind: 'text', index: 1, text: 'Answer.' },
   ])
   await start($)
   await turn($)
   await readAll($)
-  const m = await mountReply($, 'msg-1', 'Answer.')
-  await w.clock.advance(60_000)
-  expect(await m.shown()).toBe('> ✻ (번역 실패, 원문) Plain English thought.\n\n답이야.')
-})
-
-test('생각: 재개한 과거 답변은 캐시해 둔 생각 번역을 위에 붙인다(요청 없음)', async ($, on) => {
-  const w = world(on, {
-    store: {
-      't:old-1': { h: shortHash('Old answer.'), ko: '옛 답변' },
-      'k:old-1': { h: shortHash('Old answer.'), kos: ['옛 생각'] },
-    },
-  })
-  await start($)
-  const m = await mountReply($, 'old-1', 'Old answer.')
-  expect(await m.shown()).toBe('> ✻ 옛 생각\n\n옛 답변')
   await w.clock.settle()
-  expect(w.calls.length).toBe(0)
-})
+  return w
+}
 
-const SETTINGS = '/home/tester/.claude/settings.json'
-
-test('생각 요약이 꺼져 있으면 띠에 켜기 버튼: 누르면 백업 후 settings.json에 그 한 줄만 더한다', async ($, on) => {
-  const before = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "thinking-ko@claude-thinking-ko": true\n  }\n}\n'
-  const w = world(on, { settings: { model: 'opus' }, files: { [SETTINGS]: before } })
+test('설정에 생각 요약이 없어도 생각이 실제로 들어오면(앱 기본값) 안내·버튼을 띄우지 않는다', async ($, on) => {
+  const w = world(on, { settings: {}, reply: p => answered(`번역 ${sourceOf(p)}`) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Real thought.' }])
   await start($)
   const band = await $.ui.mount(BAND)
+  expect(await textOf(band)).toBe('')
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  expect(await textOf(band)).toContain('번역 Real thought.')
+  expect((await textOf(band)).includes(OMITTED_HINT)).toBe(false)
+})
+
+test('생각이 텍스트 없이 오면 띠에 안내와 [생각 요약 켜기]: 누르면 백업 후 settings.json에 그 한 줄만 더한다', async ($, on) => {
+  const before = '{\n  "model": "opus",\n  "enabledPlugins": {\n    "thinking-ko@claude-thinking-ko": true\n  }\n}\n'
+  const w = await emptyThinking($, on, { files: { [SETTINGS]: before } })
+  const band = await $.ui.mount(BAND)
   expect(await textOf(band)).toContain(OMITTED_HINT)
+  const m = await mountReply($, 'msg-1', 'Answer.')
+  expect(await m.shown()).toBe('번역 Answer.') // 빈 생각은 아무 데도 안 붙는다
   await band.press({ key: 'enable-summaries' })
   const backup = w.writes.find(x => x.path === `${SETTINGS}.thinking-ko.bak`)
   const written = w.writes.find(x => x.path === SETTINGS)
@@ -529,8 +580,7 @@ test('생각 요약이 꺼져 있으면 띠에 켜기 버튼: 누르면 백업 �
 })
 
 test('settings.json이 JSON으로 안 읽히면 건드리지 않는다', async ($, on) => {
-  const w = world(on, { settings: {}, files: { [SETTINGS]: '{ "model": "opus", // comment\n}' } })
-  await start($)
+  const w = await emptyThinking($, on, { files: { [SETTINGS]: '{ "model": "opus", // comment\n}' } })
   const band = await $.ui.mount(BAND)
   await band.press({ key: 'enable-summaries' })
   expect(w.writes.filter(x => x.path.startsWith(SETTINGS))).toEqual([])
@@ -541,4 +591,18 @@ test('생각 요약이 이미 켜져 있고 아직 생각이 없으면 띠는 �
   await start($)
   const band = await $.ui.mount(BAND)
   expect(await textOf(band)).toBe('')
+})
+
+test('생각 띠는 데스크톱 화면 규칙으로도 그려진다(펼침·접힘)', async ($, on) => {
+  const w = world(on, { reply: p => answered(`번역 ${sourceOf(p)}`) })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'One.\n\nTwo.' }])
+  await start($)
+  await turn($)
+  await readAll($)
+  await w.clock.settle()
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' as const })
+  expect(await textOf(band)).toContain('번역 Two.')
+  await band.press({ key: 'fold' })
+  expect(await textOf(band)).toContain('번역 Two.')
+  expect((await textOf(band)).includes('번역 One.')).toBe(false)
 })

@@ -1,7 +1,7 @@
 {
   "name": "thinking-ko",
-  "version": "2.3.0",
-  "description": "Shows Claude's thinking (as a quote above the reply it led to) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
+  "version": "2.4.0",
+  "description": "Shows Claude's thinking (live, above the prompt) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
   "author": {
     "name": "esleeeeee"
   },
@@ -33,6 +33,13 @@
       "title": "Claude model",
       "description": "Claude model alias or id used when no Gemini key is set.",
       "default": "haiku",
+      "required": false
+    },
+    "thinking_in_reply": {
+      "type": "boolean",
+      "title": "Thinking above replies",
+      "description": "Also draw the translated thinking as a quote at the top of the reply that follows it.",
+      "default": false,
       "required": false
     }
   }

@@ -20,6 +20,8 @@ import {
   shortHash,
   Slots,
   StreamTracker,
+  tailLines,
+  takeParagraphs,
   ThoughtCollector,
   TIMEOUT_MS,
   timeoutFor,
@@ -528,5 +530,32 @@ describe('프롬프트·표시', () => {
   test('quoteBlock / sameTextKey: 생각을 인용문으로, 공백 차이는 같은 글로', () => {
     expect(quoteBlock('**제목**\n\n본문', '✻ ')).toBe('> ✻ **제목**\n>\n> 본문')
     expect(sameTextKey('  Done.\n\n  Next ')).toBe('Done. Next')
+  })
+})
+
+describe('생각 문단 나누기', () => {
+  test('takeParagraphs: 빈 줄로 끝난 문단만 떼고, final이면 나머지까지', () => {
+    expect(takeParagraphs('One.\n\nTwo is still', 0, false)).toEqual({ parts: ['One.'], next: 6 })
+    expect(takeParagraphs('One.\n\nTwo is done.', 6, true)).toEqual({ parts: ['Two is done.'], next: 18 })
+    expect(takeParagraphs('No break yet', 0, false)).toEqual({ parts: [], next: 0 })
+  })
+
+  test('takeParagraphs: 코드 펜스 안의 빈 줄에서는 끊지 않는다', () => {
+    const text = 'Look:\n\n```ts\nconst a = 1\n\nconst b = 2\n```\n\nAfter.'
+    const { parts } = takeParagraphs(text, 0, true)
+    expect(parts).toEqual(['Look:', '```ts\nconst a = 1\n\nconst b = 2\n```', 'After.'])
+  })
+
+  test('takeParagraphs: 빈 줄 없이 너무 길면 마지막 문장 끝에서 끊는다', () => {
+    const long = 'This sentence is about twenty words long and keeps going on. '.repeat(12)
+    const { parts, next } = takeParagraphs(long, 0, false)
+    expect(parts.length).toBe(1)
+    expect(parts[0]!.endsWith('.')).toBe(true)
+    expect(next > 100 && next <= 600).toBe(true)
+  })
+
+  test('tailLines: 마지막 줄들만', () => {
+    expect(tailLines('a\nb\nc', 5)).toEqual({ text: 'a\nb\nc', cut: false })
+    expect(tailLines('a\nb\nc', 2)).toEqual({ text: 'b\nc', cut: true })
   })
 })
