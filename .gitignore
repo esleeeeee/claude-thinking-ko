@@ -32,3 +32,6 @@ coverage/
 .superpowers/
 .DS_Store
 Thumbs.db
+
+# Types the Claude Code engine lays beside a mod it loads from a folder
+.claude-plugin/types/
