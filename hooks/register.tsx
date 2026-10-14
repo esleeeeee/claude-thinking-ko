@@ -20,7 +20,9 @@
 // drawn at the top of that reply block instead (`thinking_in_reply`, on by default). When a
 // thinking block ends, what follows it in the stream waits a moment (at most HOLD_MS, inside the
 // hook's budget) for that thought's last part to be translated, so the Korean thought shows before
-// the reply (`thinking_first`, on by default); chunks are never changed. A fold button keeps only
+// the reply (`thinking_first`, on by default); chunks are never changed. Where nothing draws what
+// the module shows (the VS Code extension asks for no drawing, nor does a -p run), thinking is not
+// translated and nothing waits. A fold toggle keeps only
 // the latest lines. The `/thinking-ko` pane lists recent thoughts. Claude Code
 // only receives thinking text when thinking summaries are on (`"showThinkingSummaries": true`, which
 // the terminal does not have by default): where no settings file says anything about them, the
@@ -230,13 +232,14 @@ export const register: Register = (on, options) => {
   const timers: Timers = { after: (ms, fn) => need().after(ms, fn) }
 
   // ---- log: status lines only (no source text, no translation, no key) ----
-  const lines: string[] = []
+  /** Lines not written yet. Other sessions write the same file, so each flush adds to it as it is then. */
+  const pending: string[] = []
   let logPath: string | null | undefined
   let flushArmed = false
 
   const log = (line: string): void => {
-    lines.push(`${new Date().toISOString()} ${redact(line)}`)
-    if (lines.length > LOG_MAX_LINES) lines.splice(0, lines.length - LOG_MAX_LINES)
+    pending.push(`${new Date().toISOString()} ${redact(line)}`)
+    if (pending.length > LOG_MAX_LINES) pending.splice(0, pending.length - LOG_MAX_LINES)
     if (flushArmed || !io) return
     flushArmed = true
     try {
@@ -249,24 +252,27 @@ export const register: Register = (on, options) => {
     }
   }
 
-  const flushLog = async (): Promise<void> => {
+  const writeLog = async (): Promise<void> => {
     const x = io
-    if (!x) return
+    if (!x || pending.length === 0) return
+    const batch = pending.splice(0)
     try {
       if (logPath === undefined) {
         const home = await x.home()
         logPath = home ? `${home.replace(/[\\/]+$/, '')}/.claude/thinking-ko/thinking-ko.log` : null
-        if (logPath) {
-          const old = await x.read(logPath).catch(() => '')
-          lines.unshift(...old.split('\n').filter(Boolean))
-          if (lines.length > LOG_MAX_LINES) lines.splice(0, lines.length - LOG_MAX_LINES)
-        }
       }
-      if (logPath) await x.write(logPath, `${lines.join('\n')}\n`)
+      if (!logPath) return
+      const old = await x.read(logPath).catch(() => '')
+      const all = [...old.split('\n').filter(Boolean), ...batch]
+      await x.write(logPath, `${all.slice(-LOG_MAX_LINES).join('\n')}\n`)
     } catch {
       // A log that cannot be written never stops the translation.
     }
   }
+
+  /** Writes one batch at a time, so two flushes of this module never overwrite each other. */
+  let flushing: Promise<void> = Promise.resolve()
+  const flushLog = (): Promise<void> => (flushing = flushing.then(writeLog, writeLog))
 
   // ---- redraw ----
   /** Checks run on every change (a hold waiting for a thought to be translated). */
@@ -283,7 +289,12 @@ export const register: Register = (on, options) => {
 
   /** Render sites already noted in the log (component and surface), for diagnosis. */
   const sitesLogged = new Set<string>()
+  /** A render hook of this module ran: some surface draws what the module shows. */
+  let drawn = false
+  /** Where nothing draws (VS Code today, a -p run), thinking is not translated: said once. */
+  let undrawnNoted = false
   const noteSite = (what: string): void => {
+    drawn = true
     if (sitesLogged.has(what)) return
     sitesLogged.add(what)
     log(`render ${what}`)
@@ -740,7 +751,18 @@ export const register: Register = (on, options) => {
   // thinking block, the next chunk may wait briefly for its translation (holdFor).
   on('turn.step', async function* ($, e, next) {
     const step = tracker.begin()
-    const thinking = e.agentId === undefined ? collector.begin() : undefined
+    // Thinking is translated only where it can be shown: the terminal, the desktop, or a surface
+    // that has asked this module to draw. Elsewhere it would cost requests and hold the reply.
+    let shown = drawn
+    if (!shown && e.agentId === undefined) {
+      const surfaces = await $.session.surfaces().catch((): readonly string[] => [])
+      shown = surfaces.some(s => s === 'terminal' || s === 'desktop')
+      if (!shown && !undrawnNoted) {
+        undrawnNoted = true
+        log(`thinking not translated: nothing draws here (surfaces=${surfaces.join('|') || 'none'})`)
+      }
+    }
+    const thinking = e.agentId === undefined && shown ? collector.begin() : undefined
     if (thinking !== undefined) currentTurn = e.turnId
     const live = new Map<number, Thought>()
     const close = (closed: { index: number } | undefined): void => {

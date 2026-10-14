@@ -3,7 +3,7 @@
 // 모델·HTTP는 모킹한다.
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
-import type { HttpInit, ModelCompleteResult, On, RenderElement } from 'claude-code'
+import type { HttpInit, ModelCompleteResult, On, RenderElement, RenderSurface } from 'claude-code'
 
 import { PENDING_ANSWER, PENDING_ANSWER_RETRY, PENDING_THINKING, shortHash, STREAMING_THINKING } from '../hooks/core'
 import { AUTO_SUMMARIES_NOTE, FAILED_MARK, FOLD_HREF, OMITTED_HINT, RESTART_HINT, SUMMARIES_ON_HINT } from '../hooks/register'
@@ -23,6 +23,8 @@ type World = {
   fetches: Array<{ url: string; init?: HttpInit }>
   writes: Array<{ path: string; text: string }>
   store: Map<string, unknown>
+  /** 파일들(쓰면 바뀐다) */
+  disk: Map<string, string>
   toasts: string[]
   appended: () => readonly unknown[]
 }
@@ -34,8 +36,10 @@ type WorldOptions = {
   fetch?: (url: string) => { status?: number; text: string }
   /** 사용자 설정(병합본). 기본은 생각 요약이 켜진 상태. */
   settings?: Record<string, unknown>
-  /** 읽을 수 있는 파일들 */
+  /** 읽을 수 있는 파일들(쓴 파일은 다시 읽힌다) */
   files?: Record<string, string>
+  /** 세션이 그려지는 화면들. 기본은 터미널. */
+  surfaces?: RenderSurface[]
 }
 
 function world(on: On, opts: WorldOptions = {}): World {
@@ -43,7 +47,8 @@ function world(on: On, opts: WorldOptions = {}): World {
   mock.env(on, { HOME: '/home/tester' })
   const session = mock.session(on)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
-  const w: World = { clock, calls: [], fetches: [], writes: [], store, toasts: [], appended: () => session.appended() }
+  const disk = new Map<string, string>(Object.entries(opts.files ?? {}))
+  const w: World = { clock, calls: [], fetches: [], writes: [], store, disk, toasts: [], appended: () => session.appended() }
   // $.store를 메모리로 대신한다(테스트에서 들여다보려고 mock.store 대신 직접 둔다).
   on('store.get', ($, e) => ({ value: structuredClone(store.get(e.key)) }))
   on('store.set', ($, e) => {
@@ -58,10 +63,12 @@ function world(on: On, opts: WorldOptions = {}): World {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('fs.read', ($, e) => (opts.files && e.path in opts.files ? { value: opts.files[e.path]! } : { deny: 'no such file' }))
+  on('fs.read', ($, e) => (disk.has(e.path) ? { value: disk.get(e.path)! } : { deny: 'no such file' }))
+  on('session.surfaces', () => ({ value: opts.surfaces ?? ['terminal'] }))
   on('settings.read', () => ({ value: opts.settings ?? { showThinkingSummaries: true } }))
   on('fs.write', ($, e) => {
     w.writes.push({ path: e.path, text: e.text })
+    disk.set(e.path, e.text)
     return { value: undefined }
   })
   on('model.complete', async ($, e) => {
@@ -962,4 +969,49 @@ test('데스크톱: 아래에 그릴 줄을 아직 모르면(입력 없이 이�
   expect(await textOf(prompt)).toBe('prompt') // 지난 턴의 질문 줄에는 안 붙는다
   const termBand = await $.ui.mount(BAND)
   expect(await textOf(termBand)).toBe('') // 터미널은 진행 줄 위에 그린다
+})
+
+// ---- 그리는 화면이 없는 곳(VS Code 확장, -p 실행) ----
+
+test('VS Code처럼 플러그인 화면을 그리지 않는 곳에서는 생각을 번역하지 않고 답변도 붙잡지 않는다', async ($, on) => {
+  const w = world(on, { surfaces: ['vscode'], reply: translateAll })
+  stepWith(on, [
+    { kind: 'thinking', index: 0, text: 'First I will look at the repository layout.\n\nThen I check the manifest carefully.' },
+    { kind: 'text', index: 1, text: 'Done.' },
+  ])
+  await start($)
+  await turn($)
+  const got: StepChunk[] = []
+  await readInto($, got)
+  await w.clock.settle()
+  expect(textsOf(got)).toEqual(['Done.']) // 기다리지 않고 그대로 나간다
+  expect(w.calls).toEqual([]) // 번역 요청 없음
+  await w.clock.advance(2000)
+  expect(w.disk.get('/home/tester/.claude/thinking-ko/thinking-ko.log')).toContain('thinking not translated: nothing draws here (surfaces=vscode)')
+})
+
+test('그 화면이 플러그인 그림을 한 번이라도 요청했으면 번역한다', async ($, on) => {
+  const w = world(on, { surfaces: [], reply: translateAll })
+  stepWith(on, [{ kind: 'thinking', index: 0, text: 'Some thought worth translating.\n\n' }])
+  await start($)
+  await turn($)
+  await $.ui.mount(USER_ROW('u-1'))
+  await readAll($)
+  await w.clock.settle()
+  expect(w.calls.map(c => sourceOf(c.prompt))).toEqual(['Some thought worth translating.'])
+})
+
+test('로그는 다른 세션이 그사이 쓴 줄을 지우지 않고 뒤에 이어 쓴다', async ($, on) => {
+  const LOG = '/home/tester/.claude/thinking-ko/thinking-ko.log'
+  const w = world(on, { files: { [LOG]: '2026-01-01T00:00:00.000Z old line\n' } })
+  await start($)
+  await w.clock.advance(2000)
+  w.disk.set(LOG, `${w.disk.get(LOG)}2026-01-01T00:00:01.000Z other session line\n`) // 다른 세션이 쓴 줄
+  await $.ui.mount(SPINNER)
+  await w.clock.advance(2000)
+  const text = w.disk.get(LOG) ?? ''
+  expect(text).toContain('old line')
+  expect(text).toContain('start backend=claude:haiku')
+  expect(text).toContain('other session line')
+  expect(text.indexOf('other session line')).toBeLessThan(text.indexOf('render site=Spinner surface=terminal'))
 })
