@@ -336,11 +336,18 @@ export const register: Register = (on, options) => {
   }
 
   // ---- translation: one pool per kind (thinking 2 requests at a time, replies 1, as the original) ----
-  const request = (kind: TranslationKind) => (source: string, signal: AbortSignal) => {
+  // A failed Gemini call (an HTTP error, a cut-off reply) falls back to Claude for that text.
+  const request = (kind: TranslationKind) => async (source: string, signal: AbortSignal) => {
     const x = need()
-    return geminiKey
-      ? geminiRequest(x.fetch, geminiModel, geminiKey, source, kind)
-      : claudeRequest(x.complete, claudeModel, source, timeoutFor(source), signal, kind)
+    const claude = () => claudeRequest(x.complete, claudeModel, source, timeoutFor(source), signal, kind)
+    if (!geminiKey) return claude()
+    try {
+      return await geminiRequest(x.fetch, geminiModel, geminiKey, source, kind)
+    } catch (e) {
+      if (signal.aborted) throw e
+      log(`fallback backend=claude:${claudeModel} kind=${kind} in=${source.length} err=${JSON.stringify(clip(e instanceof Error ? e.message : String(e), 120))}`)
+      return claude()
+    }
   }
 
   const answers = new TranslationManager({

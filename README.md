@@ -112,7 +112,7 @@ Claude가 생각하는 중에 문장이 끝날 때마다 번역해서 보여줍�
 
 옵션은 터미널에서 `/plugin configure thinking-ko@claude-thinking-ko`로 바꿀 수 있습니다. 바꾼 뒤에는 Claude Code를 다시 시작해야 적용됩니다.
 
-Gemini 키는 [여기](https://aistudio.google.com/apikey)서 발급받아 위 설정 창에 넣으면 됩니다. 키는 따로 보안 저장소에 저장되고 로그에도 남지 않습니다.
+Gemini 키는 [여기](https://aistudio.google.com/apikey)서 발급받아 위 설정 창에 넣으면 됩니다. 키는 따로 보안 저장소에 저장되고 로그에도 남지 않습니다. Gemini 요청이 실패하면 그 글은 Haiku로 번역합니다.
 
 ### showThinkingSummaries
 
@@ -161,7 +161,7 @@ Claude Code 플러그인 API로 화면에 그리는 부분만 바꿉니다. 대�
 - 답변: 답변 블록(`AssistantMessage`)을 그릴 때 번역문으로 바꿔 그립니다.
 - 생각: 응답 스트림(`turn.step`)에서 생각을 읽어 문장 단위로 번역합니다. API에 생각 블록을 그리는 자리가 없어서 영어 생각은 그대로 두고 번역을 따로 그립니다. 터미널은 진행 표시줄(`Spinner`) 위, 앱은 질문(`UserMessage`)이나 도구 줄(`ToolUse`, `ToolGroup`) 아래입니다.
 - 생각이 끝나면 다음 응답 조각을 최대 3초 붙잡아 두고 번역을 기다립니다. 내용은 바꾸지 않습니다.
-- 번역은 기본으로 Claude Haiku(`$.model.complete`)를 쓰고, 키가 있으면 Gemini API(`$.http.fetch`)를 씁니다. 순서 보장, 동시 요청 제한, 타임아웃, 재시도는 원본 구현을 그대로 가져왔습니다.
+- 번역은 기본으로 Claude Haiku(`$.model.complete`)를 쓰고, 키가 있으면 Gemini API(`$.http.fetch`)를 쓰고, Gemini가 실패한 글만 Haiku로 다시 보냅니다. 순서 보장, 동시 요청 제한, 타임아웃, 재시도는 원본 구현을 그대로 가져왔습니다.
 
 ## 한계
 
@@ -174,7 +174,7 @@ Claude Code 플러그인 API로 화면에 그리는 부분만 바꿉니다. 대�
 
 ## 개인정보와 비용
 
-- 번역하려고 생각과 답변 원문을 따로 보냅니다. 기본은 내 Claude 계정의 Haiku, 키를 넣으면 Google Gemini입니다. 민감한 작업에는 쓰지 않는 게 좋습니다.
+- 번역하려고 생각과 답변 원문을 따로 보냅니다. 기본은 내 Claude 계정의 Haiku, 키를 넣으면 Google Gemini입니다(Gemini가 실패하면 Haiku). 민감한 작업에는 쓰지 않는 게 좋습니다.
 - 번역 요청만큼 사용량이 늘어납니다.
 - 번역 결과는 로컬에 캐시합니다. 키는 코드나 저장소에 넣지 마세요.
 

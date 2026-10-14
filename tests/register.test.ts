@@ -335,7 +335,7 @@ test(
 )
 
 test(
-  'Gemini 오류: 잘린 응답·HTTP 오류는 실패로 보고 원문, 오류 본문은 로그에 남기지 않는다',
+  'Gemini 오류: 잘린 응답·HTTP 오류면 그 글은 Claude로 번역하고, 원문·오류 본문·키는 로그에 남기지 않는다',
   { options: { gemini_api_key: KEY } },
   async ($, on) => {
     let n = 0
@@ -347,16 +347,41 @@ test(
     })
     await start($)
     await turn($)
+    const a = await mountReply($, 'msg-1', 'Will fail.')
+    await w.clock.settle()
+    expect(await a.shown()).toBe('번역 Will fail.')
+    const b = await mountReply($, 'msg-2', 'Also fails.')
+    await w.clock.settle()
+    expect(await b.shown()).toBe('번역 Also fails.')
+    expect(w.fetches.length).toBe(2)
+    expect(w.calls.map(c => c.model)).toEqual(['haiku', 'haiku'])
+    await w.clock.advance(2000) // 로그를 파일로 내보낸다
+    const log = w.writes.at(-1)?.text ?? ''
+    expect(log).toContain('truncated')
+    expect(log).toContain('gemini http 403 PERMISSION_DENIED')
+    expect(log).toContain('fallback backend=claude:haiku kind=answer')
+    for (const secret of [KEY, 'Will fail', 'Also fails']) expect(log.includes(secret)).toBe(false)
+  },
+)
+
+test(
+  'Gemini도 Claude도 실패하면 원문을 두고 1분 뒤 한 번 더 시도한다',
+  { options: { gemini_api_key: KEY } },
+  async ($, on) => {
+    const w = world(on, {
+      fetch: () => ({ status: 503, text: JSON.stringify({ error: { status: 'UNAVAILABLE' } }) }),
+      reply: () => {
+        throw new Error('model down')
+      },
+    })
+    await start($)
+    await turn($)
     const m = await mountReply($, 'msg-1', 'Will fail.')
     await w.clock.settle()
     expect(await m.shown()).toBe(`Will fail.\n\n${PENDING_ANSWER_RETRY}`)
     await w.clock.advance(60_000)
     expect(await m.shown()).toBe('Will fail.')
-    await w.clock.advance(2000) // 로그를 파일로 내보낸다
-    const log = w.writes.at(-1)?.text ?? ''
-    expect(log).toContain('truncated')
-    expect(log).toContain('gemini http 403 PERMISSION_DENIED')
-    expect(log.includes(KEY)).toBe(false)
+    expect(w.fetches.length).toBe(2)
   },
 )
 
