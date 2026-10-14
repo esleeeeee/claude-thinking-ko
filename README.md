@@ -38,6 +38,8 @@ Claude Code 2.1.287 이상이 필요합니다. 앱과 터미널 중 쓰는 쪽�
 
 앱에서는 Code 탭의 로컬 세션에서만 동작합니다. 자동으로 동기화를 켜두면 업데이트도 알아서 받습니다.
 
+마켓플레이스 추가가 안 되면 [Releases](https://github.com/esleeeeee/claude-thinking-ko/releases/latest)에서 zip 파일을 받아 **설정 > 플러그인 > + 추가 > 플러그인 업로드**로 올려도 됩니다. 이렇게 설치하면 자동 업데이트는 되지 않습니다.
+
 ### 터미널 (CLI)
 
 ```sh
