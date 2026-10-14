@@ -30,7 +30,11 @@ Claude Code 2.1.287 이상이 필요합니다. 앱과 터미널 중 쓰는 쪽�
 
    <img src="docs/images/app-4-install.png" width="720" alt="탐색 탭의 Thinking ko 줄에서 추가를 누르는 모습">
 
-5. Code 탭에서 새 세션을 열고 질문하면 됩니다.
+5. **내 플러그인**에서 Thinking ko를 열고, 오른쪽 스위치가 파란색(켜짐)인지 확인
+
+   <img src="docs/images/app-5-enabled.png" width="720" alt="내 플러그인의 Thinking ko 화면에서 오른쪽 스위치가 파란색으로 켜져 있는 모습">
+
+6. Code 탭에서 새 세션을 열고 질문하면 됩니다.
 
 앱에서는 Code 탭의 로컬 세션에서만 동작합니다. 자동으로 동기화를 켜두면 업데이트도 알아서 받습니다.
 
