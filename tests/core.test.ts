@@ -5,6 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   answerId,
   buildSystemPrompt,
+  isKoreanText,
   cleanAnswer,
   clip,
   displayText,
@@ -514,19 +515,34 @@ describe('ThoughtCollector', () => {
 })
 
 describe('프롬프트·표시', () => {
-  test('생각·답변 프롬프트: 말투 규칙은 같고, 답변만 코드·마크다운 보존 규칙과 코드 예시가 있다', () => {
+  test('생각·답변 프롬프트: 생각은 반말, 답변은 존댓말이고, 답변만 코드·마크다운 보존 규칙과 코드 예시가 있다', () => {
     const thinking = buildSystemPrompt('thinking')
     const answer = buildSystemPrompt('answer')
     for (const p of [thinking, answer]) {
-      expect(p).toContain('맞춤법은 표준대로')
       expect(p.includes('햇어→') || p.includes('→햇어')).toBe(false)
       expect(p).toContain('<원문>')
     }
+    expect(thinking).toContain('맞춤법은 표준대로')
+    expect(thinking).toContain('반말·구어체')
     expect(thinking).toContain('속으로 하는 생각(영어)을 한국어 혼잣말로')
     expect(thinking).toContain('파일명·코드 식별자·명령어·URL·숫자는 원문 그대로')
+    expect(answer).toContain('존댓말')
+    expect(answer.includes('반말·구어체')).toBe(false)
+    expect(answer.includes('시발')).toBe(false)
     expect(answer).toContain('마크다운 구조')
     expect(answer).toContain('python util.py')
+    expect(answer).toContain('바꿨습니다')
     expect(thinking.includes('python util.py')).toBe(false)
+  })
+
+  test('isKoreanText: 코드·경로를 빼고 한글이 주가 되는 글만 한국어로 본다', () => {
+    expect(isKoreanText('파서 버그를 고쳤습니다.')).toBe(true)
+    expect(isKoreanText('`src/parser/date_parser.ts`의 `parseIsoDate`를 고쳤습니다.\n\n```ts\nexport function parseIsoDate(input: string) {}\n```')).toBe(true)
+    expect(isKoreanText('README.md와 CHANGELOG.md를 고쳤습니다.')).toBe(true)
+    expect(isKoreanText('I fixed the parser bug.')).toBe(false)
+    expect(isKoreanText('I fixed the bug in `파일.ts`.')).toBe(false)
+    expect(isKoreanText('The user wrote 안녕 in the greeting, so I updated the test fixture.')).toBe(false)
+    expect(isKoreanText('```\nconst x = 1\n```')).toBe(false)
   })
 
   test('quoteBlock / sameTextKey: 생각을 인용문으로, 공백 차이는 같은 글로', () => {

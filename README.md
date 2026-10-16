@@ -1,9 +1,9 @@
 # thinking-ko
 
-Claude Code에서 Claude의 생각(thinking)과 답변을 한국어 반말로 번역해서 보여주는 플러그인입니다. VS Code 확장에서는 동작하지 않습니다.
+Claude Code에서 Claude의 생각(thinking)을 한국어 반말로 번역해서 보여주는 플러그인입니다. 영어로 나온 답변은 존댓말로 번역합니다. VS Code 확장에서는 동작하지 않습니다.
 
 <p align="center">
-  <img src="docs/images/thoughts-above-reply.png" width="760" alt="Claude 앱에서 번역된 생각이 답변 위에 붙고, 답변이 반말로 나오는 화면">
+  <img src="docs/images/thoughts-above-reply.png" width="760" alt="Claude 앱에서 번역된 생각이 답변 위에 붙은 화면">
 </p>
 
 OMP용 확장인 [hvvsdcm/omp-thinking-ko](https://github.com/hvvsdcm/omp-thinking-ko)를 Claude Code 플러그인으로 옮겼습니다.
@@ -83,7 +83,7 @@ Claude가 생각하는 중에 문장이 끝날 때마다 번역해서 보여줍�
 </p>
 
 - 답변이 시작되면 그 앞의 생각이 답변 위로 옮겨 갑니다. 한국어 생각이 먼저 보이도록 답변을 최대 3초까지 기다리게 합니다.
-- 답변도 반말로 번역합니다. 코드나 경로, 숫자는 그대로 둡니다.
+- 영어 답변은 존댓말로 번역합니다. 코드나 경로, 숫자는 그대로 둡니다. Claude가 처음부터 한국어로 답하면 번역하지 않고 그대로 둡니다.
 - 생각 위의 `▾ 접기`로 접고 `▸ 펼치기`로 펼칩니다.
 - `/thinking-ko`를 입력하면 최근 생각 번역 20개를 모아서 볼 수 있습니다.
 
@@ -96,7 +96,7 @@ Claude가 생각하는 중에 문장이 끝날 때마다 번역해서 보여줍�
 번역  답 주기 전에 n = 999 경계 케이스 한 번 더 확인해 봐야겠다.
 
 답변  I fixed the bug in `src/parser.ts`: the date regex didn't accept a trailing `Z`.
-번역  음.. `src/parser.ts`에서 버그 고쳤어. 날짜 정규식이 끝에 붙는 `Z`를 안 받고 있더라고.
+번역  `src/parser.ts`의 버그를 고쳤습니다. 날짜 정규식이 끝에 붙는 `Z`를 받지 않고 있었습니다.
 ```
 
 ## 설정
@@ -158,7 +158,7 @@ Get-Content $HOME\.claude\thinking-ko\thinking-ko.log -Tail 30
 
 Claude Code 플러그인 API로 화면에 그리는 부분만 바꿉니다. 대화 기록이나 Claude에게 가는 요청은 건드리지 않습니다.
 
-- 답변: 답변 블록(`AssistantMessage`)을 그릴 때 번역문으로 바꿔 그립니다.
+- 답변: 답변 블록(`AssistantMessage`)을 그릴 때 번역문으로 바꿔 그립니다. 이미 한국어인 답변(코드와 경로를 빼고 한글이 로마자의 절반 이상)은 번역하지 않습니다.
 - 생각: 응답 스트림(`turn.step`)에서 생각을 읽어 문장 단위로 번역합니다. API에 생각 블록을 그리는 자리가 없어서 영어 생각은 그대로 두고 번역을 따로 그립니다. 터미널은 진행 표시줄(`Spinner`) 위, 앱은 질문(`UserMessage`)이나 도구 줄(`ToolUse`, `ToolGroup`) 아래입니다.
 - 생각이 끝나면 다음 응답 조각을 최대 3초 붙잡아 두고 번역을 기다립니다. 내용은 바꾸지 않습니다.
 - 번역은 기본으로 Claude Haiku(`$.model.complete`)를 쓰고, 키가 있으면 Gemini API(`$.http.fetch`)를 쓰고, Gemini가 실패한 글만 Haiku로 다시 보냅니다. 순서 보장, 동시 요청 제한, 타임아웃, 재시도는 원본 구현을 그대로 가져왔습니다.
@@ -198,7 +198,7 @@ claude plugin test .
 로컬 확인 체크리스트:
 
 1. `claude --plugin-dir`로 실행했을 때 로드 오류가 없는지
-2. 영어 답변이 끝나고 반말로 바뀌는지, 코드와 경로는 그대로인지
+2. 영어 답변이 끝나고 존댓말로 바뀌는지, 코드와 경로는 그대로인지, 한국어 답변은 그대로인지
 3. 생각하는 도중에 번역이 쌓이고, 답변이 나오면 그 위로 옮겨 가는지
 4. 접기, 펼치기, `/thinking-ko` 패널이 되는지
 5. ctrl+o에 원문이 그대로 있는지

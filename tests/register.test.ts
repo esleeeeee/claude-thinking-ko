@@ -129,6 +129,17 @@ async function mountReply($: Engine, requestId: string, text: string, extra: { i
   }
 }
 
+test('이미 한국어로 쓴 답변은 번역하지 않고 Claude가 쓴 그대로(존댓말) 보여 준다', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await turn($)
+  const m = await mountReply($, 'msg-1', '`parser.ts`의 버그를 고쳤습니다. 테스트도 통과합니다.')
+  await w.clock.settle()
+  expect(await m.shown()).toBe('`parser.ts`의 버그를 고쳤습니다. 테스트도 통과합니다.')
+  expect(w.calls.length).toBe(0)
+  expect(w.store.has('t:msg-1')).toBe(false)
+})
+
 test('기본(Haiku): 처음엔 원문+대기 표시, 번역이 오면 다시 그려 번역문, 캐시 저장, 대화 기록은 그대로', async ($, on) => {
   const w = world(on, {
     reply: async p => {
@@ -145,8 +156,7 @@ test('기본(Haiku): 처음엔 원문+대기 표시, 번역이 오면 다시 그
   expect(w.calls.length).toBe(1)
   expect(w.calls[0]!.model).toBe('haiku')
   expect(w.calls[0]!.prompt).toBe('<원문>\nI fixed the parser bug.\n</원문>')
-  expect(w.calls[0]!.system).toContain('반말')
-  expect(w.calls[0]!.system).toContain('맞춤법은 표준대로')
+  expect(w.calls[0]!.system).toContain('존댓말')
   expect(w.calls[0]!.system).toContain('URL, 숫자는 한 글자도 바꾸지 마')
   expect(w.fetches).toEqual([])
   expect(w.store.get('t:msg-1')).toEqual({ h: shortHash('I fixed the parser bug.'), ko: '번역 I fixed the parser bug.' })
@@ -323,7 +333,7 @@ test(
     expect(f.init?.headers?.['x-goog-api-key']).toBe(KEY)
     const body = JSON.parse(f.init?.body ?? '{}') as { contents: Array<{ parts: Array<{ text: string }> }>; systemInstruction: { parts: Array<{ text: string }> } }
     expect(body.contents[0]!.parts[0]!.text).toBe('<원문>\nSecret plan: ship it.\n</원문>')
-    expect(body.systemInstruction.parts[0]!.text).toContain('반말')
+    expect(body.systemInstruction.parts[0]!.text).toContain('존댓말')
 
     await w.clock.advance(2000) // 로그를 파일로 내보낸다
     const log = w.writes.at(-1)

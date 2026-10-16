@@ -1,7 +1,7 @@
 {
   "name": "thinking-ko",
-  "version": "2.8.3",
-  "description": "Shows Claude's thinking (live in the transcript, then above the reply it led to) and replies in casual Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
+  "version": "2.9.0",
+  "description": "Shows Claude's thinking (live in the transcript, then above the reply it led to) in casual Korean and English replies in polite Korean; display only, the transcript is unchanged. Claude Haiku by default, Gemini with your own key.",
   "author": {
     "name": "esleeeeee"
   },

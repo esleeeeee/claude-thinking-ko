@@ -1,4 +1,4 @@
-// thinking-ko for Claude Code: shows Claude's thinking and replies in casual Korean (반말·구어체).
+// thinking-ko for Claude Code: shows Claude's thinking in casual Korean (반말·구어체) and English replies in polite Korean (존댓말).
 //
 // It changes the drawing only. Nothing is appended to the session, and no request the model
 // sees is changed; the response stream is read and passed on unchanged.
@@ -33,6 +33,7 @@ import type { Elements, HttpInit, HttpResponse, Register, RenderElement, RenderS
 import {
   answerId,
   clip,
+  isKoreanText,
   displayText,
   PENDING_THINKING,
   PENDING_THINKING_RETRY,
@@ -890,7 +891,8 @@ export const register: Register = (on, options) => {
     if (!answers.get(id)) {
       if (!armed) history.add(e.requestId)
       // History is shown as written (no retroactive translation); so is a block still being generated.
-      if (!history.has(e.requestId) && !tracker.isGenerating(source)) answers.enqueue(id, source)
+      // A reply Claude already wrote in Korean stays as written.
+      if (!history.has(e.requestId) && !tracker.isGenerating(source) && !isKoreanText(source)) answers.enqueue(id, source)
     }
 
     const body = displayText(source, answers.get(id)) ?? source
